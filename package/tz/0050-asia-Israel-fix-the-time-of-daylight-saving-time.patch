@@ -1,0 +1,43 @@
+From 99e0d47f738dfc04eda9305cc080979aa98723ba Mon Sep 17 00:00:00 2001
+From: Maxim Zhukov <mzhukov@dlink.ru>
+Date: Tue, 13 Apr 2021 10:40:37 +0300
+Subject: [#45757] asia, Israel: fix the time of daylight saving time
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Переместил время перехода на летнее время с 2 часов утра на полночь. Это
+связано из-за того, что zic генерирует временную зону 'IST-2IDT,M3.4.4/26,M10.5.0',
+а наши устройства на uclibc тулчейнах не воспринимают смещения в часах
+больше 24 и скатываются на UTC из-за того что не поддерживают tzdb
+версии 3.
+
+После перемещения времени перехода на 2 часа назад zic уже генерирует
+правило, которое удовлетворяет формату tzdb версии 2.0: 'IST-2IDT,M3.4.4/24,M10.5.0'
+
+Конечно, из-за этого нарушается время перехода, но зато будет работать
+на всех наших устройствах
+
+Signed-off-by: Maxim Zhukov <mzhukov@dlink.ru>
+---
+ asia | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/asia b/asia
+index ed94413..ee53334 100644
+--- a/asia
++++ b/asia
+@@ -2058,8 +2058,8 @@ Rule	Zion	2012	only	-	Sep	23	2:00	0	S
+ # hour such that it will be UTC+3.
+ 
+ # Rule	NAME	FROM	TO	-	IN	ON	AT	SAVE	LETTER/S
+-Rule	Zion	2013	max	-	Mar	Fri>=23	2:00	1:00	D
+-Rule	Zion	2013	max	-	Oct	lastSun	2:00	0	S
++Rule	Zion	2013	max	-	Mar	Fri>=23	0:00	1:00	D
++Rule	Zion	2013	max	-	Oct	lastSun	0:00	0	S
+ 
+ # Zone	NAME		STDOFF	RULES	FORMAT	[UNTIL]
+ Zone	Asia/Jerusalem	2:20:54 -	LMT	1880
+-- 
+2.31.0
+

@@ -1,0 +1,119 @@
+#!/bin/bash
+
+find_sdk_root() {
+	while [ "$PWD" != "/" ]; do
+		if [ -f "$PWD/.sdk_root" ]; then
+			echo $PWD
+			break
+		fi
+
+		cd ..
+	done
+}
+
+SDK_ROOT="$(find_sdk_root)"
+
+if [ -z "$SDK_ROOT" ]; then
+	echo "You are not in the SDK folder" >&2
+	exit 1
+fi
+
+# cd to profiles folder
+cd "$SDK_ROOT/profiles"
+
+# ticket number
+echo "Enter ticket number:"
+read TICKET
+
+if [ -n "$TICKET" ]; then
+	TICKET="[#$TICKET] "
+fi
+
+# find existing profile
+if ! [ command -v fzf &> /dev/null ]; then
+	echo "Select existing profile to clone from:"
+	OLD="$(ls | fzf --height 40% --border)"
+	echo "$OLD"
+else
+	echo "Tip: install fzf for interactive profile selection!"
+	echo "Enter existing profile to clone from:"
+	read OLD
+fi
+
+if ! [ -e "$OLD" ] || ! [ -d "$OLD" ]; then
+	echo "Cannot find profile folder '$OLD'" >&2
+	exit 1
+fi
+
+# create new profile folder
+NEW=""
+while ! [ -n "$NEW" ]; do
+	echo "Enter new profile name:"
+	read -e -i "$OLD""_" NEW
+
+	if ! [ -n "$NEW" ]; then
+		echo "Empty input, try again"
+	fi
+done
+
+if [ -d "$NEW" ] && [ "$(ls -A $NEW)" ]; then
+	echo "Profile '$NEW' already exists, aborting" >&2
+	exit 2
+fi
+
+if ! [ -d "$NEW" ]; then
+	mkdir $NEW
+fi
+
+cd $NEW
+
+# copy & rename profile file
+echo "-------------------------------------------------------------------------"
+cp "../$OLD/$OLD" "$NEW"
+echo "Copied file $OLD as $NEW"
+
+# copy/link/discard any file
+# default is link
+for FILE in `ls ../$OLD`; do
+	if [ "$FILE" = "$OLD" ]; then
+		continue
+	fi
+
+	ACTION=""
+	DEF_ACTION="l"
+
+	while [ "$ACTION" != "c" ] && [ "$ACTION" != "l" ]; do
+		echo "Found '$FILE': [c]opy/[l]ink/[s]kip?"
+		read -e -i "$DEF_ACTION" ACTION
+
+		if   [ "$ACTION" = "c" ]; then
+			# copy file to the new folder
+			cp "../$OLD/$FILE" .
+
+		elif [ "$ACTION" = "l" ]; then
+			# create a symlink in the new folder
+			ln -s "../$OLD/$FILE" .
+
+		elif [ "$ACTION" = "s" ]; then
+			# skip file
+			break
+		else
+			echo "Invalid input, try again"
+		fi
+	done
+done
+
+echo "-------------------------------------------------------------------------"
+
+# ls output
+ls -l .
+
+echo "-------------------------------------------------------------------------"
+
+# commit
+git add .
+git commit -sm "${TICKET}${NEW}: new profile
+
+Новый профиль $OLD -> $NEW."
+
+echo "-------------------------------------------------------------------------"

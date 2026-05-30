@@ -1,0 +1,106 @@
+From 641ff6768b04e624f415e84fffa8cef0d0a04947 Mon Sep 17 00:00:00 2001
+From: Maxim Zhukov <mzhukov@dlink.ru>
+Date: Tue, 16 Jun 2020 21:20:02 +0300
+Subject: zip: add 'oneshot' option
+
+Generates only one Zone (with Links).
+You can pass either zone or link name.
+
+Signed-off-by: Maxim Zhukov <mzhukov@dlink.ru>
+---
+ zic.c | 38 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/zic.c b/zic.c
+index a902b34..126027c 100644
+--- a/zic.c
++++ b/zic.c
+@@ -656,6 +656,7 @@ static const char *	lcltime;
+ static const char *	directory;
+ static const char *	leapsec;
+ static const char *	tzdefault;
++static const char *	oneshotname; /* ".*bss" = 0 */
+ 
+ /* -1 if the TZif output file should be slim, 0 if default, 1 if the
+    output should be fat for backward compatibility.  ZIC_BLOAT_DEFAULT
+@@ -677,6 +678,7 @@ main(int argc, char **argv)
+ {
+ 	register int c, k;
+ 	register ptrdiff_t i, j;
++	const char *oneshottz = NULL;
+ 	bool timerange_given = false;
+ 
+ #ifdef S_IWGRP
+@@ -703,7 +705,7 @@ main(int argc, char **argv)
+ 		} else if (strcmp(argv[k], "--help") == 0) {
+ 			usage(stdout, EXIT_SUCCESS);
+ 		}
+-	while ((c = getopt(argc, argv, "b:d:l:L:p:r:st:vy:")) != EOF && c != -1)
++	while ((c = getopt(argc, argv, "b:d:l:L:p:r:st:vy:1:")) != EOF && c != -1)
+ 		switch (c) {
+ 			default:
+ 				usage(stderr, EXIT_FAILURE);
+@@ -793,6 +795,16 @@ _("%s: invalid time range: %s\n"),
+ 			case 's':
+ 				warning(_("-s ignored"));
+ 				break;
++			case '1':
++				if (oneshotname == NULL)
++					oneshotname = optarg;
++				else {
++					fprintf(stderr,
++_("%s: More than one -1 option specified\n"),
++						progname);
++					return EXIT_FAILURE;
++				}
++				break;
+ 		}
+ 	if (optind == argc - 1 && strcmp(argv[optind], "=") == 0)
+ 		usage(stderr, EXIT_FAILURE);	/* usage message by request */
+@@ -820,6 +832,26 @@ _("%s: invalid time range: %s\n"),
+ 	if (errors)
+ 		return EXIT_FAILURE;
+ 	associate();
++
++	if (oneshotname) {
++		for (i = 0; (i < nzones) && !oneshottz; ++i) {
++			const char *name = zones[i].z_name;
++			if (name && !strcmp(name, oneshotname))
++				oneshottz = name;
++		}
++		for (i = 0; (i < nlinks) && !oneshottz; ++i) {
++			const char *name = links[i].l_linkname;
++			if (!strcmp(name, oneshotname))
++				oneshottz = links[i].l_target;
++		}
++		if (!oneshottz) {
++			fprintf(stderr,
++_("%s: Cannot find zone/link for %s\n"),
++				progname, oneshotname);
++			return EXIT_FAILURE;
++		}
++	}
++
+ 	change_directory(directory);
+ 	for (i = 0; i < nzones; i = j) {
+ 		/*
+@@ -827,12 +859,16 @@ _("%s: invalid time range: %s\n"),
+ 		*/
+ 		for (j = i + 1; j < nzones && zones[j].z_name == NULL; ++j)
+ 			continue;
++		if (oneshottz && strcmp(oneshottz, zones[i].z_name))
++			continue;
+ 		outzone(&zones[i], j - i);
+ 	}
+ 	/*
+ 	** Make links.
+ 	*/
+ 	for (i = 0; i < nlinks; ++i) {
++		if (oneshottz && strcmp(oneshottz, links[i].l_target))
++			continue;
+ 		eat(links[i].l_filename, links[i].l_linenum);
+ 		dolink(links[i].l_target, links[i].l_linkname, false);
+ 		if (noise)
+-- 
+2.30.0
+

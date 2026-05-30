@@ -1,0 +1,358 @@
+From 1bd3cbb279f6a1b24a23027c22d59e9d2c8c462a Mon Sep 17 00:00:00 2001
+From: Alexander Safonov <asafonov@dlink.ru>
+Date: Tue, 22 Dec 2020 20:49:50 +0300
+Subject: [PATCH 2/2] [D-LINK] luac: allow to cross-compile bytecode for
+ different targets
+
+Signed-off-by: Alexander Safonov <asafonov@dlink.ru>
+---
+ src/ldump.c   | 165 +++++++++++++++++++++++++++++++++++++++++++++++---
+ src/luac.c    |  37 +++++++++++
+ src/luaconf.h |   1 +
+ src/lundump.h |  14 +++++
+ 4 files changed, 207 insertions(+), 10 deletions(-)
+
+diff --git a/src/ldump.c b/src/ldump.c
+index aa224b9..8ffb6d3 100644
+--- a/src/ldump.c
++++ b/src/ldump.c
+@@ -11,6 +11,9 @@
+ 
+ 
+ #include <stddef.h>
++#include <stdlib.h>
++#include <assert.h>
++#include <string.h>
+ 
+ #include "lua.h"
+ 
+@@ -27,15 +30,34 @@ typedef struct {
+   int status;
+ } DumpState;
+ 
++#ifdef LUAC_CROSS_SUPPORT
++struct cc_setup cc_setup; // default to zero-out -> all native
++#define CC_INT_SIZE      cc_setup.int_size
++#define CC_SIZE_SIZE     cc_setup.size_size
++#define CC_CODE_SIZE     cc_setup.code_size
++#define CC_LINTEGER_SIZE cc_setup.integer_size
++#define CC_LNUMBER_SIZE  cc_setup.number_size
++#else
++#define CC_INT_SIZE      sizeof(int)
++#define CC_SIZE_SIZE     sizeof(size_t)
++#define CC_CODE_SIZE     sizeof(Instruction)
++#define CC_LINTEGER_SIZE sizeof(lua_Integer)
++#define CC_LNUMBER_SIZE  sizeof(lua_Number)
++#endif
+ 
+ /*
+ ** All high-level dumps go through DumpVector; you can change it to
+ ** change the endianness of the result
+ */
+-#define DumpVector(v,n,D)	DumpBlock(v,(n)*sizeof((v)[0]),D)
++#define DumpVector(v,n,ts,s,D)	CrossDumpVector(v, sizeof((v)[0]), (n), ts, s, D)
+ 
+ #define DumpLiteral(s,D)	DumpBlock(s, sizeof(s) - sizeof(char), D)
+ 
++enum {
++  UNSIGNED,
++  SIGNED,
++};
++
+ 
+ static void DumpBlock (const void *b, size_t size, DumpState *D) {
+   if (D->status == 0 && size > 0) {
+@@ -45,33 +67,148 @@ static void DumpBlock (const void *b, size_t size, DumpState *D) {
+   }
+ }
+ 
++static void CrossDumpVector(const void *v, size_t memb_size, size_t n, size_t target_memb_size, int sign, DumpState *D)
++{
++  (void) target_memb_size;
++  (void) sign;
++
++#ifdef LUAC_CROSS_SUPPORT
++#define getEndian() \
++  (((union {        \
++    int i;          \
++     char c;        \
++  }) {.i = 1}).c == 1 ? 'L' : 'B')
++
++#define RawToInt(u, size, prefix)              \
++    (size == sizeof(prefix long long))    ?    \
++      u.prefix##_longlong                   :  \
++    (size == sizeof(prefix long))         ?    \
++      u.prefix##_long                       :  \
++    (size == sizeof(prefix int))          ?    \
++      u.prefix##_int                        :  \
++    (size == sizeof(prefix short))        ?    \
++      u.prefix##_short                      :  \
++      u.prefix##_char
++
++#define RawFromInt(val, u, size, prefix)       \
++    if (size == sizeof(prefix long long))      \
++      u.prefix##_longlong = val;               \
++    else if (size == sizeof(prefix long))      \
++      u.prefix##_long = val;                   \
++    else if (size == sizeof(prefix int))       \
++      u.prefix##_int = val;                    \
++    else if (size == sizeof(prefix short))     \
++      u.prefix##_short = val;                  \
++    else                                       \
++      u.prefix##_char = val;
++
++  const char *p = v;
++  size_t i;
++  size_t b;
++
++  if (!target_memb_size)
++    target_memb_size = memb_size;
++
++  const char native_endian = getEndian();
++  const char target_endian = cc_setup.endian ?: native_endian;
++  const int need_swap   = (target_endian != native_endian);
++  const int need_resize = (target_memb_size != memb_size);
++
++  if ((target_endian != native_endian) || (target_memb_size != memb_size)) {
++    // slow path for cross-compile
++    #define MAX_MEMB_SIZE 8
++    assert(target_memb_size <= MAX_MEMB_SIZE && memb_size <= MAX_MEMB_SIZE);
++
++    for (i = 0; i < n; i++) {
++      const char *cur = p + i * memb_size;
++      union {
++        char raw[MAX_MEMB_SIZE];
++        signed char            signed_char;
++        signed short int       signed_short;
++        signed int             signed_int;
++        signed long int        signed_long;
++        signed long long int   signed_longlong;
++        unsigned char          unsigned_char;
++        unsigned short int     unsigned_short;
++        unsigned int           unsigned_int;
++        unsigned long int      unsigned_long;
++        unsigned long long int unsigned_longlong;
++      } u = {.raw = {0}};
++
++      memcpy(u.raw, cur, memb_size);
++
++      if (need_resize) {
++        if (sign == SIGNED) {
++          RawFromInt(RawToInt(u, memb_size, signed),   u, target_memb_size, signed);
++        } else {
++          RawFromInt(RawToInt(u, memb_size, unsigned), u, target_memb_size, unsigned);
++        }
++      }
++
++      if (need_swap) {
++        for (b = 0; b < target_memb_size / 2; b++) {
++          char c = u.raw[b];
++          u.raw[b] = u.raw[target_memb_size - b - 1];
++          u.raw[target_memb_size - b - 1] = c;
++        }
++      }
++
++      DumpBlock(u.raw, target_memb_size, D);
++    }
++    return;
++  }
++#endif
++
++  // endian and size are the same - fast path for native dump
++  DumpBlock(v, memb_size * n, D);
++}
++
+ 
+-#define DumpVar(x,D)		DumpVector(&x,1,D)
++#define DumpVar(x,ts,s,D)		DumpVector(&x,1,ts,s,D)
+ 
+ 
+ static void DumpByte (int y, DumpState *D) {
+   lu_byte x = (lu_byte)y;
+-  DumpVar(x, D);
++  DumpVar(x, sizeof(x), UNSIGNED, D);
+ }
+ 
+ 
+ static void DumpInt (int x, DumpState *D) {
+-  DumpVar(x, D);
++  DumpVar(x, CC_INT_SIZE, SIGNED, D);
+ }
+ 
+ 
+ static void DumpSize (size_t x, DumpState *D) {
+-  DumpVar(x, D);
++  DumpVar(x, CC_SIZE_SIZE, UNSIGNED, D);
+ }
+ 
+ 
+ static void DumpNumber (lua_Number x, DumpState *D) {
+-  DumpVar(x, D);
++#ifdef LUAC_CROSS_SUPPORT
++  if (CC_LNUMBER_SIZE && CC_LNUMBER_SIZE != sizeof(x)) {
++    if (sizeof(long double) == CC_LNUMBER_SIZE) {
++      long double v = x;
++      DumpVar(v, sizeof(v), UNSIGNED, D);
++    } else if (sizeof(double) == CC_LNUMBER_SIZE) {
++      double v = x;
++      DumpVar(v, sizeof(v), UNSIGNED, D);
++    } else if (sizeof(float) == CC_LNUMBER_SIZE) {
++      float v = x;
++      DumpVar(v, sizeof(v), UNSIGNED, D);
++    } else {
++      abort();
++    }
++
++    return;
++  }
++#endif
++
++  DumpVar(x, sizeof(x), UNSIGNED, D);
+ }
+ 
+ 
+ static void DumpInteger (lua_Integer x, DumpState *D) {
+-  DumpVar(x, D);
++  DumpVar(x, CC_LINTEGER_SIZE, SIGNED, D);
+ }
+ 
+ 
+@@ -87,14 +224,14 @@ static void DumpString (const TString *s, DumpState *D) {
+       DumpByte(0xFF, D);
+       DumpSize(size, D);
+     }
+-    DumpVector(str, size - 1, D);  /* no need to save '\0' */
++    DumpVector(str, size - 1, 1, UNSIGNED, D);  /* no need to save '\0' */
+   }
+ }
+ 
+ 
+ static void DumpCode (const Proto *f, DumpState *D) {
+   DumpInt(f->sizecode, D);
+-  DumpVector(f->code, f->sizecode, D);
++  DumpVector(f->code, f->sizecode, CC_CODE_SIZE, SIGNED, D);
+ }
+ 
+ 
+@@ -153,7 +290,7 @@ static void DumpDebug (const Proto *f, DumpState *D) {
+   int i, n;
+   n = (D->strip) ? 0 : f->sizelineinfo;
+   DumpInt(n, D);
+-  DumpVector(f->lineinfo, n, D);
++  DumpVector(f->lineinfo, n, CC_INT_SIZE, SIGNED, D);
+   n = (D->strip) ? 0 : f->sizelocvars;
+   DumpInt(n, D);
+   for (i = 0; i < n; i++) {
+@@ -191,11 +328,19 @@ static void DumpHeader (DumpState *D) {
+   DumpByte(LUAC_VERSION, D);
+   DumpByte(LUAC_FORMAT, D);
+   DumpLiteral(LUAC_DATA, D);
++#ifdef LUAC_CROSS_SUPPORT
++  DumpByte(cc_setup.int_size     ?: sizeof(int), D);
++  DumpByte(cc_setup.size_size    ?: sizeof(size_t), D);
++  DumpByte(cc_setup.code_size    ?: sizeof(Instruction), D);
++  DumpByte(cc_setup.integer_size ?: sizeof(lua_Integer), D);
++  DumpByte(cc_setup.number_size  ?: sizeof(lua_Number), D);
++#else
+   DumpByte(sizeof(int), D);
+   DumpByte(sizeof(size_t), D);
+   DumpByte(sizeof(Instruction), D);
+   DumpByte(sizeof(lua_Integer), D);
+   DumpByte(sizeof(lua_Number), D);
++#endif
+   DumpInteger(LUAC_INT, D);
+   DumpNumber(LUAC_NUM, D);
+ }
+diff --git a/src/luac.c b/src/luac.c
+index c0c91d0..74359d3 100644
+--- a/src/luac.c
++++ b/src/luac.c
+@@ -61,6 +61,15 @@ static void usage(const char* message)
+   "  -p       parse only\n"
+   "  -s       strip debug information\n"
+   "  -v       show version information\n"
++#ifdef LUAC_CROSS_SUPPORT
++  "  -c mode  crosscompile to target (format: EDSCIN, example: B44448) \n"
++  "              E  endian              (B - big, L - little)\n"
++  "              D  sizeof(int)         (4/8)\n"
++  "              S  sizeof(size_t)      (4/8)\n"
++  "              C  sizeof(Instruction) (4/8)\n"
++  "              I  sizeof(Lua_Integer) (4/8)\n"
++  "              N  sizeof(Lua_Number)  (4/8)\n"
++#endif
+   "  --       stop handling options\n"
+   "  -        stop handling options and process stdin\n"
+   ,progname,Output);
+@@ -88,6 +97,34 @@ static int doargs(int argc, char* argv[])
+    break;
+   else if (IS("-l"))			/* list */
+    ++listing;
++#ifdef LUAC_CROSS_SUPPORT
++  else if (IS("-c"))			/* crosscompile */
++  {
++    const char *mode = argv[++i];
++    if (strlen(mode) != 6)
++      usage("invalid mode length for '-c'");
++
++    cc_setup.endian = *mode;
++    cc_setup.int_size      = mode[1] - '0';
++    cc_setup.size_size     = mode[2] - '0';
++    cc_setup.code_size     = mode[3] - '0';
++    cc_setup.integer_size  = mode[4] - '0';
++    cc_setup.number_size   = mode[5] - '0';
++
++    if (cc_setup.endian != 'B'     && cc_setup.endian != 'L')
++      usage("'-c': endian type must be 'B' or 'L'");
++    if (cc_setup.int_size != 4     && cc_setup.int_size != 8)
++      usage("'-c': int size must be 4 or 8");
++    if (cc_setup.size_size != 4    && cc_setup.size_size != 8)
++      usage("'-c': size_t size must be 4 or 8");
++    if (cc_setup.code_size != 4    && cc_setup.code_size != 8)
++      usage("'-c': Instruction size must be 4 or 8");
++    if (cc_setup.integer_size != 4 && cc_setup.integer_size != 8)
++      usage("'-c': Lua_Integer size must be 4 or 8");
++    if (cc_setup.number_size != 4  && cc_setup.number_size != 8)
++      usage("'-c': Lua_Number size must be 4 or 8");
++  }
++#endif
+   else if (IS("-o"))			/* output file */
+   {
+    output=argv[++i];
+diff --git a/src/luaconf.h b/src/luaconf.h
+index f37bea0..df69f5d 100644
+--- a/src/luaconf.h
++++ b/src/luaconf.h
+@@ -776,6 +776,7 @@
+ */
+ 
+ 
++/* #define LUAC_CROSS_SUPPORT */
+ 
+ 
+ 
+diff --git a/src/lundump.h b/src/lundump.h
+index aa5cc82..7b09927 100644
+--- a/src/lundump.h
++++ b/src/lundump.h
+@@ -29,4 +29,18 @@ LUAI_FUNC LClosure* luaU_undump (lua_State* L, ZIO* Z, const char* name);
+ LUAI_FUNC int luaU_dump (lua_State* L, const Proto* f, lua_Writer w,
+                          void* data, int strip);
+ 
++#ifdef LUAC_CROSS_SUPPORT
++/* BYTECODE CROSS-COMPILE */
++struct cc_setup {
++	char endian;               // 'B'/'L', '\0' for native
++	unsigned int int_size;     // 4 or 8,    0  for native
++	unsigned int size_size;    // 4 or 8,    0  for native
++	unsigned int code_size;    // 4 or 8,    0  for native
++	unsigned int integer_size; // 4 or 8,    0  for native
++	unsigned int number_size;  // 4 or 8,    0  for native
++};
++
++extern struct cc_setup cc_setup;
++#endif
++
+ #endif
+-- 
+2.20.1
+

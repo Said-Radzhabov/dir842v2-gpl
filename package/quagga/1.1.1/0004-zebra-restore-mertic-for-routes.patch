@@ -1,0 +1,179 @@
+From aece2534fa06a70a7d2f4c496a147619c85101f8 Mon Sep 17 00:00:00 2001
+From: Maxim Zhukov <mzhukov@dlink.ru>
+Date: Tue, 16 Mar 2021 16:25:25 +0300
+Subject: [PATCH] zebra: restore mertic for routes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Возвращаем старую логику, где через mertic задавалось число хопов до
+роута. В текущей всегда использовалось 20
+
+Signed-off-by: Maxim Zhukov <mzhukov@dlink.ru>
+---
+ zebra/rt_netlink.c | 40 +++++++++++++++++++++++++++++-----------
+ zebra/rt_netlink.h |  1 -
+ 2 files changed, 29 insertions(+), 12 deletions(-)
+
+diff --git a/zebra/rt_netlink.c b/zebra/rt_netlink.c
+index 77f41a6d..09af05b2 100644
+--- a/zebra/rt_netlink.c
++++ b/zebra/rt_netlink.c
+@@ -733,6 +733,7 @@ netlink_routing_table (struct sockaddr_nl *snl, struct nlmsghdr *h,
+ 
+   int index;
+   int table;
++  int metric;
+   u_int32_t mtu = 0;
+ 
+   void *dest;
+@@ -774,6 +775,7 @@ netlink_routing_table (struct sockaddr_nl *snl, struct nlmsghdr *h,
+     flags |= ZEBRA_FLAG_SELFROUTE;
+ 
+   index = 0;
++  metric = 0;
+   dest = NULL;
+   gate = NULL;
+   src = NULL;
+@@ -792,6 +794,9 @@ netlink_routing_table (struct sockaddr_nl *snl, struct nlmsghdr *h,
+   if (tb[RTA_GATEWAY])
+     gate = RTA_DATA (tb[RTA_GATEWAY]);
+ 
++  if (tb[RTA_PRIORITY])
++    metric = *(int *) RTA_DATA(tb[RTA_PRIORITY]);
++
+   if (tb[RTA_METRICS])
+     {
+       struct rtattr *mxrta[RTAX_MAX+1];
+@@ -813,7 +818,7 @@ netlink_routing_table (struct sockaddr_nl *snl, struct nlmsghdr *h,
+ 
+       if (!tb[RTA_MULTIPATH])
+           rib_add_ipv4 (ZEBRA_ROUTE_KERNEL, flags, &p, gate, src, index,
+-                        vrf_id, table, 0, mtu, 0, SAFI_UNICAST);
++                        vrf_id, table, metric, mtu, 0, SAFI_UNICAST);
+       else
+         {
+           /* This is a multipath route */
+@@ -828,7 +833,7 @@ netlink_routing_table (struct sockaddr_nl *snl, struct nlmsghdr *h,
+           rib->type = ZEBRA_ROUTE_KERNEL;
+           rib->distance = 0;
+           rib->flags = flags;
+-          rib->metric = 0;
++          rib->metric = metric;
+           rib->mtu = mtu;
+           rib->vrf_id = vrf_id;
+           rib->table = table;
+@@ -880,7 +885,7 @@ netlink_routing_table (struct sockaddr_nl *snl, struct nlmsghdr *h,
+       p.prefixlen = rtm->rtm_dst_len;
+ 
+       rib_add_ipv6 (ZEBRA_ROUTE_KERNEL, flags, &p, gate, index, vrf_id,
+-                    table, 0, mtu, 0, SAFI_UNICAST);
++                    table, metric, mtu, 0, SAFI_UNICAST);
+     }
+ #endif /* HAVE_IPV6 */
+ 
+@@ -916,6 +921,7 @@ netlink_route_change (struct sockaddr_nl *snl, struct nlmsghdr *h,
+ 
+   int index;
+   int table;
++  int metric;
+   u_int32_t mtu = 0;
+ 
+   void *dest;
+@@ -978,6 +984,7 @@ netlink_route_change (struct sockaddr_nl *snl, struct nlmsghdr *h,
+     }
+ 
+   index = 0;
++  metric = 0;
+   dest = NULL;
+   gate = NULL;
+   src = NULL;
+@@ -998,6 +1005,9 @@ netlink_route_change (struct sockaddr_nl *snl, struct nlmsghdr *h,
+ 
+   if (h->nlmsg_type == RTM_NEWROUTE)
+     {
++      if (tb[RTA_PRIORITY])
++        metric = *(int *) RTA_DATA(tb[RTA_PRIORITY]);
++
+       if (tb[RTA_METRICS])
+         {
+           struct rtattr *mxrta[RTAX_MAX+1];
+@@ -1030,7 +1040,7 @@ netlink_route_change (struct sockaddr_nl *snl, struct nlmsghdr *h,
+         {
+           if (!tb[RTA_MULTIPATH])
+             rib_add_ipv4 (ZEBRA_ROUTE_KERNEL, 0, &p, gate, src, index, vrf_id,
+-                          table, 0, mtu, 0, SAFI_UNICAST);
++                          table, metric, mtu, 0, SAFI_UNICAST);
+           else
+             {
+               /* This is a multipath route */
+@@ -1045,7 +1055,7 @@ netlink_route_change (struct sockaddr_nl *snl, struct nlmsghdr *h,
+               rib->type = ZEBRA_ROUTE_KERNEL;
+               rib->distance = 0;
+               rib->flags = 0;
+-              rib->metric = 0;
++              rib->metric = metric;
+               rib->mtu = mtu;
+               rib->vrf_id = vrf_id;
+               rib->table = table;
+@@ -1112,7 +1122,7 @@ netlink_route_change (struct sockaddr_nl *snl, struct nlmsghdr *h,
+ 
+       if (h->nlmsg_type == RTM_NEWROUTE)
+         rib_add_ipv6 (ZEBRA_ROUTE_KERNEL, 0, &p, gate, index, vrf_id, table,
+-                      0, mtu, 0, SAFI_UNICAST);
++                      metric, mtu, 0, SAFI_UNICAST);
+       else
+         rib_delete_ipv6 (ZEBRA_ROUTE_KERNEL, zebra_flags, &p, gate, index, vrf_id,
+                          SAFI_UNICAST);
+@@ -1723,7 +1733,7 @@ netlink_route_multipath (int cmd, struct prefix *p, struct rib *rib)
+   addattr_l (&req.n, sizeof req, RTA_DST, &p->u.prefix, bytelen);
+ 
+   /* Metric. */
+-  addattr32 (&req.n, sizeof req, RTA_PRIORITY, NL_DEFAULT_ROUTE_METRIC);
++  addattr32 (&req.n, sizeof req, RTA_PRIORITY, rib->metric);
+ 
+   if (rib->mtu || rib->nexthop_mtu)
+     {
+@@ -1869,15 +1879,23 @@ skip:
+ int
+ kernel_route_rib (struct prefix *p, struct rib *old, struct rib *new)
+ {
++  int ret;
++
+   if (!old && new)
+     return netlink_route_multipath (RTM_NEWROUTE, p, new);
+   if (old && !new)
+     return netlink_route_multipath (RTM_DELROUTE, p, old);
+ 
+-   /* Replace, can be done atomically if metric does not change;
+-    * netlink uses [prefix, tos, priority] to identify prefix.
+-    * Now metric is not sent to kernel, so we can just do atomic replace. */
+-  return netlink_route_multipath (RTM_NEWROUTE, p, new);
++  /* Replace, can be done atomically if metric does not change;
++   * netlink uses [prefix, tos, priority] to identify prefix */
++  if (old->metric == new->metric)
++    return netlink_route_multipath (RTM_NEWROUTE, p, new);
++
++  /* Add + delete so the prefix does not disappear temporarily */
++  ret = netlink_route_multipath (RTM_NEWROUTE, p, new);
++  if (netlink_route_multipath (RTM_DELROUTE, p, old) < 0)
++    ret = -1;
++  return ret;
+ }
+ 
+ /* Interface address modification. */
+diff --git a/zebra/rt_netlink.h b/zebra/rt_netlink.h
+index 9fc70010..b783fdac 100644
+--- a/zebra/rt_netlink.h
++++ b/zebra/rt_netlink.h
+@@ -25,7 +25,6 @@
+ #ifdef HAVE_NETLINK
+ 
+ #define NL_PKT_BUF_SIZE 8192
+-#define NL_DEFAULT_ROUTE_METRIC 20
+ 
+ extern int
+ addattr32 (struct nlmsghdr *n, size_t maxlen, int type, int data);
+-- 
+2.30.1
+

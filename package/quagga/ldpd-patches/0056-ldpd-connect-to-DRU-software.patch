@@ -1,0 +1,81 @@
+From 13abf75ce537cdddf2e2716af45fce2db9715d82 Mon Sep 17 00:00:00 2001
+From: farisey <anikulin@dlink.ru>
+Date: Mon, 8 Apr 2019 14:06:49 +0300
+Subject: [PATCH] ldpd: connect to DRU software.
+
+Service connect and service update (tLDP for PW).
+---
+ ldpd/ldp_zebra.c | 16 ++++++++++++++++
+ ldpd/ldpd.c      |  8 ++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/ldpd/ldp_zebra.c b/ldpd/ldp_zebra.c
+index 328bc6f6..1241636e 100644
+--- a/ldpd/ldp_zebra.c
++++ b/ldpd/ldp_zebra.c
+@@ -36,6 +36,10 @@
+ #include "log.h"
+ #include "ldp_debug.h"
+ 
++#ifdef DLINK_SOFTWARE
++#include <d-link/d_service_notify.h>
++#endif
++
+ static void	 ifp2kif(struct interface *, struct kif *);
+ static void	 ifc2kaddr(struct interface *, struct connected *,
+ 		    struct kaddr *);
+@@ -259,6 +263,13 @@ int
+ kmpw_set(struct kpw *kpw)
+ {
+ 	/* TODO */
++#ifdef DLINK_SOFTWARE
++	dlink_service_update(json_pack("{s:s, s:s, s:i, s:i}",
++				       "action", "set",
++				       "ifname", kpw->ifname,
++				       "input", kpw->local_label,
++				       "output", kpw->remote_label));
++#endif
+ 	return (0);
+ }
+ 
+@@ -266,6 +277,11 @@ int
+ kmpw_unset(struct kpw *kpw)
+ {
+ 	/* TODO */
++#ifdef DLINK_SOFTWARE
++	dlink_service_update(json_pack("{s:s, s:s}",
++				       "action", "unset",
++				       "ifname", kpw->ifname));
++#endif
+ 	return (0);
+ }
+ 
+diff --git a/ldpd/ldpd.c b/ldpd/ldpd.c
+index a8e901b9..6471dc80 100644
+--- a/ldpd/ldpd.c
++++ b/ldpd/ldpd.c
+@@ -40,6 +40,10 @@
+ #include "zclient.h"
+ #include "vrf.h"
+ 
++#ifdef DLINK_SOFTWARE
++#include <d-link/d_service_notify.h>
++#endif
++
+ static void		 ldpd_shutdown(void);
+ static pid_t		 start_child(enum ldpd_process, char *, int,
+ 			    const char *, const char *);
+@@ -412,6 +416,10 @@ main(int argc, char *argv[])
+ 	/* Print banner. */
+ 	log_notice("LDPd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+ 
++#ifdef DLINK_SOFTWARE
++	dlink_service_connect(0);
++#endif
++
+ 	/* Fetch next active thread. */
+ 	while (thread_fetch(master, &thread))
+ 		thread_call(&thread);
+-- 
+2.30.1
+

@@ -1,0 +1,59 @@
+menuconfig BR2_PACKAGE_WPA_SUPPLICANT
+	bool "wpa_supplicant"
+	select BR2_PACKAGE_LIBNL
+	select BR2_PACKAGE_OPENSSL
+	help
+	  WPA supplicant for secure wireless networks
+
+	  http://w1.fi/wpa_supplicant/
+
+if BR2_PACKAGE_WPA_SUPPLICANT
+
+config BR2_PACKAGE_WPA_SUPPLICANT_REPOSITORY
+	string "local git repository"
+
+config BR2_PACKAGE_WPA_SUPPLICANT_VERSION
+	string "git branch"
+
+config BR2_PACKAGE_WPA_SUPPLICANT_DRIVER_NL80211
+	bool "nl80211 drivers support"
+	default y
+
+config BR2_PACKAGE_WPA_SUPPLICANT_DRIVER_WEXT
+	bool "Deprecated WEXT driver support"
+	default n
+
+config BR2_PACKAGE_WPA_SUPPLICANT_DRIVER_WIRED
+	bool "Wired Ethernet drivers support"
+	default n
+
+config BR2_PACKAGE_WPA_SUPPLICANT_EAP
+	bool "802.1X"
+	default n
+
+config BR2_PACKAGE_WPA_SUPPLICANT_WPS
+	bool "Enable WPS"
+	help
+	  Enable support for Wi-Fi Protected Setup (WPS).
+
+config BR2_PACKAGE_WPA_SUPPLICANT_WPA3
+	bool "Enable WPA3 support"
+	help
+	  Enable WPA3 support
+
+config BR2_PACKAGE_WPA_SUPPLICANT_DEBUG_SYSLOG
+	bool "Enable syslog support"
+	help
+	  Enable support for sending debug messages to syslog.
+
+config BR2_PACKAGE_WPA_SUPPLICANT_WPA_CLIENT_SO
+	bool "Install wpa_client shared library"
+	help
+	  Install libwpa_client.so.
+
+config BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE
+	bool "Install wpa_passphrase binary"
+	help
+	  Install wpa_passphrase command line utility.
+
+endif

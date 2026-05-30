@@ -1,0 +1,29 @@
+From 345d837f82dabcda0d0275be54f3c73402e856ec Mon Sep 17 00:00:00 2001
+From: Sergey Volga <svolga@dlink.ru>
+Date: Fri, 25 Aug 2017 13:34:02 +0300
+Subject: [PATCH] fix: building
+
+Added ifdefs to prevent building error with old kernels
+
+Signed-off-by: Sergey Volga <svolga@dlink.ru>
+---
+ zebra/rt_netlink.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/zebra/rt_netlink.c b/zebra/rt_netlink.c
+index 1a914266..77f41a6d 100644
+--- a/zebra/rt_netlink.c
++++ b/zebra/rt_netlink.c
+@@ -514,7 +514,9 @@ netlink_to_zebra_link_type (unsigned int hwt)
+     case ARPHRD_FCFABRIC: return ZEBRA_LLT_FCFABRIC;
+     case ARPHRD_IEEE802_TR: return ZEBRA_LLT_IEEE802_TR;
+     case ARPHRD_IEEE80211: return ZEBRA_LLT_IEEE80211;
++#ifdef ARPHRD_IEEE802154
+     case ARPHRD_IEEE802154: return ZEBRA_LLT_IEEE802154;
++#endif
+ #ifdef ARPHRD_IP6GRE
+     case ARPHRD_IP6GRE: return ZEBRA_LLT_IP6GRE;
+ #endif
+-- 
+2.30.1
+

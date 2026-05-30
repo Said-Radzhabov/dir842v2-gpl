@@ -1,0 +1,10 @@
+config BR2_PACKAGE_TEAL
+	bool "Teal -> Lua transpiler and type checker"
+	depends on BR2_PACKAGE_LUA
+	depends on BR2_PACKAGE_LUAFILESYSTEM
+	depends on BR2_PACKAGE_ARGPARSE
+	help
+	  Teal is a typed dialect of Lua.
+
+	  https://github.com/teal-language/tl
+

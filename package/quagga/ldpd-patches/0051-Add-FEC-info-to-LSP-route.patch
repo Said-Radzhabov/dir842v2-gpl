@@ -1,0 +1,238 @@
+From 25558ebde06dbfc5630f502b7a9f122d655f7a6f Mon Sep 17 00:00:00 2001
+From: farisey <anikulin@dlink.ru>
+Date: Wed, 27 Mar 2019 14:40:23 +0300
+Subject: [PATCH] Add FEC info to LSP route.
+
+For informational purposes. Installed via netlink under
+DLINK_SOFTWARE only, because it needs corresponding kernel support.
+
+Additional MPLS route data:
+RTA_GATEWAY: IPv4/IPv6 prefix of a corresponding FEC (4/16 bytes).
+RTA_PROTOINFO: 1 byte prefix length (mask).
+---
+ ldpd/ldp_zebra.c   | 14 ++++++++++++--
+ zebra/rt_netlink.c | 19 +++++++++++++++++++
+ zebra/zebra_mpls.c | 15 +++++++++++----
+ zebra/zebra_mpls.h | 16 ++++++++++++++--
+ zebra/zserv.c      | 13 +++++++++++--
+ 5 files changed, 67 insertions(+), 10 deletions(-)
+
+diff --git a/ldpd/ldp_zebra.c b/ldpd/ldp_zebra.c
+index 974016f5..53eb4883 100644
+--- a/ldpd/ldp_zebra.c
++++ b/ldpd/ldp_zebra.c
+@@ -92,6 +92,7 @@ ifc2kaddr(struct interface *ifp, struct connected *ifc, struct kaddr *ka)
+ 
+ static int
+ zebra_send_mpls_lsp(u_char cmd, struct zclient *zclient, int af,
++    union ldpd_addr *prefix, uint8_t prefixlen,
+     union ldpd_addr *nexthop, mpls_label_t in_label, mpls_label_t out_label)
+ {
+ 	struct stream		*s;
+@@ -120,6 +121,13 @@ zebra_send_mpls_lsp(u_char cmd, struct zclient *zclient, int af,
+ 	stream_putl(s, in_label);
+ 	stream_putl(s, out_label);
+ 
++	if (af == AF_INET)
++		stream_put_in_addr(s, &prefix->v4);
++	else
++		stream_write(s, (u_char *)&prefix->v6, 16);
++
++	stream_putc(s, prefixlen);
++
+ 	/* Put length at the first point of the stream. */
+ 	stream_putw_at(s, 0, stream_get_endp(s));
+ 
+@@ -208,8 +216,9 @@ kr_change(struct kroute *kr)
+ 		    kr->prefixlen, &kr->nexthop, kr->remote_label);
+ 
+ 	/* ILM -> NHLFE */
+-	zebra_send_mpls_lsp(ZEBRA_MPLS_LSP_ADD, zclient, kr->af, &kr->nexthop,
+-	    kr->local_label, kr->remote_label);
++	zebra_send_mpls_lsp(ZEBRA_MPLS_LSP_ADD, zclient, kr->af,
++	    &kr->prefix, kr->prefixlen,
++	    &kr->nexthop, kr->local_label, kr->remote_label);
+ 
+ 	return (0);
+ }
+@@ -228,6 +237,7 @@ kr_delete(struct kroute *kr)
+ 
+ 	/* ILM -> NHLFE */
+ 	zebra_send_mpls_lsp(ZEBRA_MPLS_LSP_DELETE, zclient, kr->af,
++	    &kr->prefix, kr->prefixlen,
+ 	    &kr->nexthop, kr->local_label, kr->remote_label);
+ 
+ 	return (0);
+diff --git a/zebra/rt_netlink.c b/zebra/rt_netlink.c
+index 331fcb34..664e784e 100644
+--- a/zebra/rt_netlink.c
++++ b/zebra/rt_netlink.c
+@@ -2353,6 +2353,25 @@ netlink_mpls_multipath (int cmd, zebra_lsp_t *lsp)
+   lse = mpls_lse_encode (lsp->ile.in_label, 0, 0, 1);
+   addattr_l (&req.n, sizeof req, RTA_DST, &lse, sizeof(mpls_lse_t));
+ 
++#ifdef DLINK_SOFTWARE
++/*
++ * farisey: #34292.
++ * If a kernel is not patched, it refuses 2 following RTA's.
++ * So add them to the request if it's ready only.
++ */
++	if (lsp->fec_info.af == AF_INET) {
++		addattr_l (&req.n, sizeof(req), RTA_GATEWAY,
++			   &lsp->fec_info.ipv4.s_addr, 4);
++	} else if (lsp->fec_info.af == AF_INET6) {
++		addattr_l (&req.n, sizeof(req), RTA_GATEWAY,
++			   &lsp->fec_info.ipv6, 16);
++	}
++	if (lsp->fec_info.af != AF_UNSPEC) {
++		addattr_l (&req.n, sizeof(req), RTA_PROTOINFO,
++			   &lsp->fec_info.prefixlen, 1);
++	}
++#endif
++
+   /* Fill nexthops (paths) based on single-path or multipath. The paths
+    * chosen depend on the operation.
+    */
+diff --git a/zebra/zebra_mpls.c b/zebra/zebra_mpls.c
+index fc17b15e..86456d97 100644
+--- a/zebra/zebra_mpls.c
++++ b/zebra/zebra_mpls.c
+@@ -1194,7 +1194,8 @@ int
+ mpls_lsp_install (struct zebra_vrf *zvrf, enum lsp_types_t type,
+ 		  mpls_label_t in_label, mpls_label_t out_label,
+ 		  enum nexthop_types_t gtype, union g_addr *gate,
+-		  char *ifname, ifindex_t ifindex)
++		  char *ifname, ifindex_t ifindex,
++		  const struct dru_fec_info *fec_info)
+ {
+   struct hash *lsp_table;
+   zebra_ile_t tmp_ile;
+@@ -1212,6 +1213,11 @@ mpls_lsp_install (struct zebra_vrf *zvrf, enum lsp_types_t type,
+   lsp = hash_get (lsp_table, &tmp_ile, lsp_alloc);
+   if (!lsp)
+     return -1;
++
++	if (fec_info)
++		memcpy(&lsp->fec_info, fec_info, sizeof(*fec_info));
++
++
+   nhlfe = nhlfe_find (lsp, type, gtype, gate, ifname, ifindex);
+   if (nhlfe)
+     {
+@@ -1271,7 +1277,8 @@ mpls_lsp_install (struct zebra_vrf *zvrf, enum lsp_types_t type,
+ int
+ mpls_lsp_uninstall (struct zebra_vrf *zvrf, enum lsp_types_t type,
+ 		    mpls_label_t in_label, enum nexthop_types_t gtype,
+-		    union g_addr *gate, char *ifname, ifindex_t ifindex)
++		    union g_addr *gate, char *ifname, ifindex_t ifindex,
++		    const struct dru_fec_info *fec_info)
+ {
+   struct hash *lsp_table;
+   zebra_ile_t tmp_ile;
+@@ -1469,7 +1476,7 @@ zebra_mpls_static_lsp_add (struct zebra_vrf *zvrf, mpls_label_t in_label,
+ 
+   /* (Re)Install LSP in the main table. */
+   if (mpls_lsp_install (zvrf, ZEBRA_LSP_STATIC, in_label, out_label, gtype,
+-      gate, ifname, ifindex))
++      gate, ifname, ifindex, NULL))
+     return -1;
+ 
+   return 0;
+@@ -1532,7 +1539,7 @@ zebra_mpls_static_lsp_del (struct zebra_vrf *zvrf, mpls_label_t in_label,
+ 
+       /* Uninstall LSP from the main table. */
+       mpls_lsp_uninstall (zvrf, ZEBRA_LSP_STATIC, in_label, gtype, gate,
+-			  ifname, ifindex);
++			  ifname, ifindex, NULL);
+ 
+       /* Delete static LSP NHLFE */
+       snhlfe_del (snhlfe);
+diff --git a/zebra/zebra_mpls.h b/zebra/zebra_mpls.h
+index ccdc31ff..e5352119 100644
+--- a/zebra/zebra_mpls.h
++++ b/zebra/zebra_mpls.h
+@@ -121,6 +121,15 @@ struct zebra_slsp_t_
+ 
+ };
+ 
++struct dru_fec_info {
++	u_int8_t af;
++	union {
++		struct in_addr ipv4;
++		struct in6_addr ipv6;
++	};
++	u_int8_t prefixlen;
++};
++
+ /*
+  * Label swap entry (ile -> list of nhlfes)
+  */
+@@ -143,6 +152,7 @@ struct zebra_lsp_t_
+   /* Address-family of NHLFE - saved here for delete. All NHLFEs */
+   /* have to be of the same AF */
+   u_char addr_family;
++  struct dru_fec_info fec_info;
+ };
+ 
+ 
+@@ -172,7 +182,8 @@ int
+ mpls_lsp_install (struct zebra_vrf *zvrf, enum lsp_types_t type,
+ 		  mpls_label_t in_label, mpls_label_t out_label,
+ 		  enum nexthop_types_t gtype, union g_addr *gate,
+-		  char *ifname, ifindex_t ifindex);
++		  char *ifname, ifindex_t ifindex,
++		  const struct dru_fec_info *fec_info);
+ 
+ /*
+  * Uninstall a particular static NHLFE in the forwarding table. If this is
+@@ -181,7 +192,8 @@ mpls_lsp_install (struct zebra_vrf *zvrf, enum lsp_types_t type,
+ int
+ mpls_lsp_uninstall (struct zebra_vrf *zvrf, enum lsp_types_t type,
+ 		    mpls_label_t in_label, enum nexthop_types_t gtype,
+-		    union g_addr *gate, char *ifname, ifindex_t ifindex);
++		    union g_addr *gate, char *ifname, ifindex_t ifindex,
++		    const struct dru_fec_info *fec_info);
+ 
+ /*
+  * Uninstall all LDP NHLFEs for a particular LSP forwarding entry.
+diff --git a/zebra/zserv.c b/zebra/zserv.c
+index 491a22c6..78386c01 100644
+--- a/zebra/zserv.c
++++ b/zebra/zserv.c
+@@ -1515,6 +1515,7 @@ zread_mpls_lsp (int command, struct zserv *client, u_short length,
+   u_int32_t in_label, out_label;
+   struct zebra_vrf *zvrf;
+   int ret;
++  struct dru_fec_info fec_info;
+ 
+   /* Get input stream.  */
+   s = client->ibuf;
+@@ -1538,15 +1539,23 @@ zread_mpls_lsp (int command, struct zserv *client, u_short length,
+   in_label = stream_getl (s);
+   out_label = stream_getl (s);
+ 
++	fec_info.af = af;
++	if (af == AF_INET)
++		fec_info.ipv4.s_addr = stream_get_ipv4(s);
++	else
++		stream_get(&fec_info.ipv6, s, 16);
++	fec_info.prefixlen = stream_getc (s);
++
++
+   zvrf = vrf_info_lookup (vrf_id);
+   if (!zvrf)
+     return -1;
+ 
+   if (command == ZEBRA_MPLS_LSP_ADD)
+     ret = mpls_lsp_install (zvrf, type, in_label, out_label, gtype, &gate,
+-			    NULL, 0);
++			    NULL, 0, &fec_info);
+   else if (command == ZEBRA_MPLS_LSP_DELETE)
+-    ret = mpls_lsp_uninstall (zvrf, type, in_label, gtype, &gate, NULL, 0);
++    ret = mpls_lsp_uninstall (zvrf, type, in_label, gtype, &gate, NULL, 0, &fec_info);
+ 
+   return ret;
+ #else
+-- 
+2.30.1
+

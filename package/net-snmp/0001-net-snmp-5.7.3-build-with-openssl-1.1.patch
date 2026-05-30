@@ -1,0 +1,1286 @@
+From 392e006fc5c64a74ec080b090d02a2d29340494c Mon Sep 17 00:00:00 2001
+From: Daniel Molkentin <daniel.molkentin@suse.com>
+Date: Wed, 22 Mar 2017 14:49:06 +0100
+Subject: [PATCH] Backport several fixes from upstream's V5-7-patches branch.
+
+Initial support for OpenSSL 1.1 API changes. A slightly modified version from
+patch 1336, updated to work if you have LibreSSL.
+
+There is more work needed to handle TLSTCP and DTLSUDP transports.
+
+Thanks to Sharmila Podury.
+
+OpenSSL 1.1 fixes for SNMP-USM-DH-OBJECTS-MIB implementation.
+
+openssl 1.1.0: Fix several build errors
+
+Autodetect DH_get0_pqg() and DH_get0_key() to unbreak the MinGW build.
+
+In recent versions of openssl several data structures have been made
+opaque that were not opaque before. Avoid that attempts to access
+members of these opaque data structures cause the build to fail.
+
+MIBs: Use strlcpy() instead of strcpy() to copy a variable-length string into a fixed-size array
+
+apps/snmpusm: Only provide a DH_get0_key() replacement if openssl is available
+---
+ agent/mibgroup/disman/event/mteEvent.c             |   6 +-
+ agent/mibgroup/disman/event/mteTriggerConf.c       |   5 +-
+ agent/mibgroup/disman/schedule/schedCore.c         |  17 +--
+ agent/mibgroup/hardware/cpu/cpu.c                  |   2 +-
+ agent/mibgroup/hardware/cpu/cpu_linux.c            |   2 +-
+ agent/mibgroup/hardware/cpu/cpu_pcp.c              |   2 +-
+ agent/mibgroup/hardware/cpu/cpu_sysinfo.c          |   2 +-
+ agent/mibgroup/hardware/sensors/hw_sensors.c       |   2 +-
+ agent/mibgroup/host/hr_disk.c                      |   3 +-
+ agent/mibgroup/host/hr_network.c                   |   2 +-
+ agent/mibgroup/host/hr_swrun.c                     |  34 +++---
+ agent/mibgroup/mibII/mta_sendmail.c                |   4 +-
+ agent/mibgroup/mibII/system_mib.c                  |   2 +-
+ agent/mibgroup/mibII/vacm_conf.c                   |  13 ++-
+ .../usmDHParameters/usmDHParameters.c              |  39 ++++++-
+ .../usmDHUserKeyTable/usmDHUserKeyTable_data_get.c |  67 +++++++++++-
+ agent/mibgroup/target/snmpTargetParamsEntry.c      |   3 +-
+ agent/mibgroup/ucd-snmp/logmatch.c                 |   5 +-
+ agent/mibgroup/ucd-snmp/proc.c                     |   2 +-
+ agent/mibgroup/util_funcs.c                        |   2 +-
+ agent/mibgroup/util_funcs/get_pid_from_inode.c     |   4 +-
+ apps/snmpusm.c                                     |  51 +++++++--
+ configure                                          | 115 ++++++++++++++++++++-
+ configure.d/config_os_libs2                        |  29 +++++-
+ include/net-snmp/net-snmp-config.h.in              |  21 ++++
+ snmplib/keytools.c                                 |   8 +-
+ snmplib/scapi.c                                    |   8 +-
+ snmplib/snmp_openssl.c                             |  36 +++++--
+ snmplib/vacm.c                                     |  20 ++--
+ win32/net-snmp/net-snmp-config.h                   |  15 +++
+ win32/net-snmp/net-snmp-config.h.in                |  15 +++
+ 31 files changed, 440 insertions(+), 96 deletions(-)
+
+diff --git a/agent/mibgroup/disman/event/mteEvent.c b/agent/mibgroup/disman/event/mteEvent.c
+index bc4ff0bfb..880520f22 100644
+--- a/agent/mibgroup/disman/event/mteEvent.c
++++ b/agent/mibgroup/disman/event/mteEvent.c
+@@ -76,9 +76,7 @@ _init_builtin_mteEvent( const char *event, const char *oname, oid *trapOID, size
+     netsnmp_tdata_row *row;
+     struct mteEvent   *entry;
+ 
+-    memset(ename, 0, sizeof(ename));
+-    ename[0] = '_';
+-    memcpy(ename+1, event, strlen(event));
++    snprintf(ename, sizeof(ename), "_%s", event);
+ 
+     row = mteEvent_createEntry( "_snmpd", ename, 1 );
+     if (!row || !row->data)
+@@ -89,7 +87,7 @@ _init_builtin_mteEvent( const char *event, const char *oname, oid *trapOID, size
+     entry->mteNotification_len = trapOID_len;
+     memcpy( entry->mteNotification, trapOID, trapOID_len*sizeof(oid));
+     memcpy( entry->mteNotifyOwner, "_snmpd", 6 );
+-    memcpy( entry->mteNotifyObjects,  oname, strlen(oname));
++    strlcpy(entry->mteNotifyObjects, oname, sizeof(entry->mteNotifyObjects));
+     entry->flags |= MTE_EVENT_FLAG_ENABLED|
+                     MTE_EVENT_FLAG_ACTIVE|
+                     MTE_EVENT_FLAG_VALID;
+diff --git a/agent/mibgroup/disman/event/mteTriggerConf.c b/agent/mibgroup/disman/event/mteTriggerConf.c
+index e7bb69b28..a0eaf2f3d 100644
+--- a/agent/mibgroup/disman/event/mteTriggerConf.c
++++ b/agent/mibgroup/disman/event/mteTriggerConf.c
+@@ -507,13 +507,12 @@ parse_mteMonitor(const char *token, const char *line)
+                     memcpy(oid_name_buf, buf, SPRINT_MAX_LEN);
+                     memset(         buf,   0, SPRINT_MAX_LEN);
+                     cp  = copy_nword_const(cp, buf, SPRINT_MAX_LEN);
+-                        value = strtol(buf, NULL, 0);
++                    value = strtol(buf, NULL, 0);
+     
+                     /*
+                      * ... then save the rest of the line for later.
+                      */
+-                    memset( buf, 0,  strlen(buf));
+-                    memcpy( buf, cp, strlen(cp));
++                    strlcpy(buf, cp, sizeof(buf));
+                     cp = NULL;  /* To terminate the processing loop */
+                     DEBUGMSGTL(("disman:event:conf", "%s: Thresh (%s, %ld, %s)\n",
+                                               tname, oid_name_buf, value, buf));
+diff --git a/agent/mibgroup/disman/schedule/schedCore.c b/agent/mibgroup/disman/schedule/schedCore.c
+index c3db34f20..9dcf63b12 100644
+--- a/agent/mibgroup/disman/schedule/schedCore.c
++++ b/agent/mibgroup/disman/schedule/schedCore.c
+@@ -454,6 +454,7 @@ schedTable_createEntry(const char *schedOwner, const char *schedName)
+ {
+     struct schedTable_entry *entry;
+     netsnmp_tdata_row *row;
++    int len;
+ 
+     DEBUGMSGTL(("disman:schedule:entry", "creating entry (%s, %s)\n",
+                                           schedOwner, schedName));
+@@ -472,16 +473,20 @@ schedTable_createEntry(const char *schedOwner, const char *schedName)
+      *  data structure, and in the table_data helper.
+      */
+     if (schedOwner) {
+-        memcpy(entry->schedOwner, schedOwner, strlen(schedOwner));
+-        netsnmp_tdata_row_add_index(row, ASN_OCTET_STR,
+-                           entry->schedOwner, strlen(schedOwner));
++        len = strlen(schedOwner);
++        if (len > sizeof(entry->schedOwner))
++            len = sizeof(entry->schedOwner);
++        memcpy(entry->schedOwner, schedOwner, len);
++        netsnmp_tdata_row_add_index(row, ASN_OCTET_STR, entry->schedOwner, len);
+     }
+     else
+         netsnmp_tdata_row_add_index(row, ASN_OCTET_STR, "", 0 );
+ 
+-    memcpy(    entry->schedName,  schedName,  strlen(schedName));
+-    netsnmp_tdata_row_add_index(row, ASN_OCTET_STR,
+-                           entry->schedName,  strlen(schedName));
++    len = strlen(schedName);
++    if (len > sizeof(entry->schedName))
++        len = sizeof(entry->schedName);
++    memcpy(entry->schedName, schedName, len);
++    netsnmp_tdata_row_add_index(row, ASN_OCTET_STR, entry->schedName, len);
+     /*
+      * Set the (non-zero) default values in the row data structure.
+      */
+diff --git a/agent/mibgroup/hardware/cpu/cpu.c b/agent/mibgroup/hardware/cpu/cpu.c
+index 27720016d..80fef1853 100644
+--- a/agent/mibgroup/hardware/cpu/cpu.c
++++ b/agent/mibgroup/hardware/cpu/cpu.c
+@@ -148,7 +148,7 @@ netsnmp_cpu_info *netsnmp_cpu_get_byName( char *name, int create ) {
+         return NULL;
+     }
+ 
+-    strcpy(cpu->name, name);
++    strlcpy(cpu->name, name, sizeof(cpu));
+     if ( _cpu_tail ) {
+         cpu->idx = _cpu_tail->idx+1;
+         _cpu_tail->next = cpu;
+diff --git a/agent/mibgroup/hardware/cpu/cpu_linux.c b/agent/mibgroup/hardware/cpu/cpu_linux.c
+index b1dc30832..b221afc55 100644
+--- a/agent/mibgroup/hardware/cpu/cpu_linux.c
++++ b/agent/mibgroup/hardware/cpu/cpu_linux.c
+@@ -72,7 +72,7 @@ void init_cpu_linux( void ) {
+ #ifdef DESCR_FIELD
+         if (!strncmp( buf, DESCR_FIELD, strlen(DESCR_FIELD))) {
+             cp = strchr( buf, ':' );
+-            strcpy( cpu->descr, cp+2 );
++            strlcpy(cpu->descr, cp + 2, sizeof(cpu->descr));
+             cp = strchr( cpu->descr, '\n' );
+             *cp = 0;
+         }
+diff --git a/agent/mibgroup/hardware/cpu/cpu_pcp.c b/agent/mibgroup/hardware/cpu/cpu_pcp.c
+index 94c7b5cfa..62c0a0443 100644
+--- a/agent/mibgroup/hardware/cpu/cpu_pcp.c
++++ b/agent/mibgroup/hardware/cpu/cpu_pcp.c
+@@ -120,7 +120,7 @@ void init_cpu_pcp( void ) {
+     for (i=0; i<cpu_num ; i++) {
+        cpu = netsnmp_cpu_get_byIdx( i, 1 );
+        sprintf(tstr, "cpu%d",i);
+-       strcpy(cpu->name,  tstr);
++       strlcpy(cpu->name, tstr, sizeof(cpu->name));
+        strcpy(cpu->descr, "An electronic chip that makes the computer work");
+     }
+ }
+diff --git a/agent/mibgroup/hardware/cpu/cpu_sysinfo.c b/agent/mibgroup/hardware/cpu/cpu_sysinfo.c
+index ed1f3579f..7b009a226 100644
+--- a/agent/mibgroup/hardware/cpu/cpu_sysinfo.c
++++ b/agent/mibgroup/hardware/cpu/cpu_sysinfo.c
+@@ -66,7 +66,7 @@ void init_cpu_sysinfo( void )
+     {
+        cpu = netsnmp_cpu_get_byIdx(i, 1);
+        sprintf(tstr, "cpu%d",i);
+-       strcpy(cpu->name,  tstr);
++       strlcpy(cpu->name, tstr, sizeof(cpu->name));
+        strcpy(cpu->descr, "Central Processing Unit");
+     }
+ }
+diff --git a/agent/mibgroup/hardware/sensors/hw_sensors.c b/agent/mibgroup/hardware/sensors/hw_sensors.c
+index 1a0164553..a5341d0f9 100644
+--- a/agent/mibgroup/hardware/sensors/hw_sensors.c
++++ b/agent/mibgroup/hardware/sensors/hw_sensors.c
+@@ -168,7 +168,7 @@ sensor_by_name( const char *name, int create_type )
+             free(sp);
+             return NULL;
+         }
+-        strcpy( sp->name, name );
++        strlcpy(sp->name, name, sizeof(sp->name));
+         sp->type = create_type;
+         /*
+          * Set up the index value.
+diff --git a/agent/mibgroup/host/hr_disk.c b/agent/mibgroup/host/hr_disk.c
+index c4ac52f09..27629f673 100644
+--- a/agent/mibgroup/host/hr_disk.c
++++ b/agent/mibgroup/host/hr_disk.c
+@@ -407,7 +407,7 @@ parse_disk_config(const char *token, char *cptr)
+                  *p != '\0' && *p != '?' && *p != '*' && *p != '['; p++);
+             c = *p;
+             *p = '\0';
+-            d_str = (char *) malloc(strlen(name) + 1);
++            d_str = strdup(name);
+             if (!d_str) {
+                 SNMP_FREE(d_new);
+                 SNMP_FREE(d_str);
+@@ -416,7 +416,6 @@ parse_disk_config(const char *token, char *cptr)
+                 config_perror("Out of memory");
+                 return;
+             }
+-            strcpy(d_str, name);
+             *p = c;
+             di_curr->item_type = ITEM_STRING;
+             di_curr->item_details = (void *) d_str;
+diff --git a/agent/mibgroup/host/hr_network.c b/agent/mibgroup/host/hr_network.c
+index 6cce58c8f..3036d9200 100644
+--- a/agent/mibgroup/host/hr_network.c
++++ b/agent/mibgroup/host/hr_network.c
+@@ -257,7 +257,7 @@ int      HRN_index;
+ void
+ Save_HR_Network_Info(void)
+ {
+-    strcpy(HRN_savedName, HRN_name);
++    strlcpy(HRN_savedName, HRN_name, sizeof(HRN_savedName));
+ #if defined( USING_IF_MIB_IFTABLE_IFTABLE_DATA_ACCESS_MODULE )
+     HRN_savedFlags  = HRN_ifnet->os_flags;
+     HRN_savedErrors = HRN_ifnet->stats.ierrors + HRN_ifnet->stats.oerrors;
+diff --git a/agent/mibgroup/host/hr_swrun.c b/agent/mibgroup/host/hr_swrun.c
+index f40e99790..1fc9ae3e4 100644
+--- a/agent/mibgroup/host/hr_swrun.c
++++ b/agent/mibgroup/host/hr_swrun.c
+@@ -698,13 +698,13 @@ var_hrswrun(struct variable * vp,
+             *cp = '\0';
+ #elif HAVE_KVM_GETPROCS
+     #if defined(freebsd5) && __FreeBSD_version >= 500014
+-        strcpy(string, proc_table[LowProcIndex].ki_comm);
++        strlcpy(string, proc_table[LowProcIndex].ki_comm, sizeof(string));
+     #elif defined(dragonfly) && __DragonFly_version >= 190000
+-        strcpy(string, proc_table[LowProcIndex].kp_comm);
++        strlcpy(string, proc_table[LowProcIndex].kp_comm, sizeof(string));
+     #elif defined(openbsd5)
+-        strcpy(string, proc_table[LowProcIndex].p_comm);
++        strlcpy(string, proc_table[LowProcIndex].p_comm, sizeof(string));
+     #else
+-        strcpy(string, proc_table[LowProcIndex].kp_proc.p_comm);
++        strlcpy(string, proc_table[LowProcIndex].kp_proc.p_comm, sizeof(string));
+     #endif
+ #elif defined(linux)
+ 	if( (cp=get_proc_name_from_status(pid,buf,sizeof(buf))) == NULL ) {
+@@ -712,7 +712,7 @@ var_hrswrun(struct variable * vp,
+             *var_len = strlen(string);
+             return (u_char *) string;
+         }
+-        strcpy(string, cp);
++        strlcpy(string, cp, sizeof(string));
+ #elif defined(cygwin)
+         /* if (lowproc.process_state & (PID_ZOMBIE | PID_EXITED)) */
+         if (lowproc.process_state & PID_EXITED || (lowproc.exitcode & ~0xffff))
+@@ -721,7 +721,7 @@ var_hrswrun(struct variable * vp,
+             cygwin_conv_to_posix_path(lowproc.progname, string);
+             cp = strrchr(string, '/');
+             if (cp)
+-                strcpy(string, cp + 1);
++                strlcpy(string, cp + 1, sizeof(string));
+         } else if (query == CW_GETPINFO_FULL) {
+             DWORD           n = lowproc.dwProcessId & 0xffff;
+             HANDLE          h =
+@@ -739,7 +739,7 @@ var_hrswrun(struct variable * vp,
+                                              sizeof string)) {
+                     cp = strrchr(string, '\\');
+                     if (cp)
+-                        strcpy(string, cp + 1);
++                        strlcpy(string, cp + 1, sizeof(string));
+                 } else
+                     strcpy(string, "*** unknown");
+                 CloseHandle(h);
+@@ -795,7 +795,7 @@ var_hrswrun(struct variable * vp,
+ #elif defined(solaris2)
+ #ifdef _SLASH_PROC_METHOD_
+         if (proc_buf)
+-            strcpy(string, proc_buf->pr_psargs);
++            strlcpy(string, proc_buf->pr_psargs, sizeof(string));
+         else
+             sprintf(string, "<exited>");
+         cp = strchr(string, ' ');
+@@ -821,18 +821,18 @@ var_hrswrun(struct variable * vp,
+             *cp = '\0';
+ #elif HAVE_KVM_GETPROCS
+     #if defined(freebsd5) && __FreeBSD_version >= 500014
+-        strcpy(string, proc_table[LowProcIndex].ki_comm);
++        strlcpy(string, proc_table[LowProcIndex].ki_comm, sizeof(string));
+     #elif defined(dragonfly) && __DragonFly_version >= 190000
+-        strcpy(string, proc_table[LowProcIndex].kp_comm);
++        strlcpy(string, proc_table[LowProcIndex].kp_comm, sizeof(string));
+     #elif defined(openbsd5)
+-        strcpy(string, proc_table[LowProcIndex].p_comm);
++        strlcpy(string, proc_table[LowProcIndex].p_comm, sizeof(string));
+     #else
+-        strcpy(string, proc_table[LowProcIndex].kp_proc.p_comm);
++        strlcpy(string, proc_table[LowProcIndex].kp_proc.p_comm, sizeof(string));
+     #endif
+ #elif defined(linux)
+         cp = get_proc_name_from_cmdline(pid,buf,sizeof(buf)-1);
+         if (cp != NULL && *cp)    /* argv[0] '\0' argv[1] '\0' .... */
+-            strcpy(string, cp);
++            strlcpy(string, cp, sizeof(string));
+         else {
+             /*
+              * swapped out - no cmdline 
+@@ -842,7 +842,7 @@ var_hrswrun(struct variable * vp,
+ 		*var_len = strlen(string);
+ 		return (u_char *) string;
+ 	    }
+-            strcpy(string, cp);
++            strlcpy(string, cp, sizeof(string));
+         }
+ #elif defined(cygwin)
+         /* if (lowproc.process_state & (PID_ZOMBIE | PID_EXITED)) */
+@@ -900,7 +900,7 @@ var_hrswrun(struct variable * vp,
+         if (proc_buf) {
+             cp = strchr(proc_buf->pr_psargs, ' ');
+             if (cp)
+-                strcpy(string, cp + 1);
++                strlcpy(string, cp + 1, sizeof(string));
+             else
+                 string[0] = 0;
+         } else
+@@ -911,7 +911,7 @@ var_hrswrun(struct variable * vp,
+             cp++;
+         if (*cp == ' ')
+             cp++;
+-        strcpy(string, cp);
++        strlcpy(string, cp, sizeof(string));
+ #endif
+ #elif defined(aix4) || defined(aix5) || defined(aix6) || defined(aix7)
+         cp = strchr(proc_table[LowProcIndex].pi_comm, ' ');
+@@ -972,7 +972,7 @@ var_hrswrun(struct variable * vp,
+         while (*cp)
+             ++cp;
+         ++cp;
+-        strcpy(string, cp);
++        strlcpy(string, cp, sizeof(string));
+ #elif defined(cygwin)
+         string[0] = 0;
+ #else
+diff --git a/agent/mibgroup/mibII/mta_sendmail.c b/agent/mibgroup/mibII/mta_sendmail.c
+index c1edd079f..bcdf8fa14 100644
+--- a/agent/mibgroup/mibII/mta_sendmail.c
++++ b/agent/mibgroup/mibII/mta_sendmail.c
+@@ -586,7 +586,7 @@ add_queuegroup(const char *name, char *path)
+          */
+         *p = '\0';
+ 
+-        strcpy(parentdir, path);
++        strlcpy(parentdir, path, sizeof(parentdir));
+         /*
+          * remove last directory component from parentdir 
+          */
+@@ -877,7 +877,7 @@ read_sendmailcf(BOOL config)
+                                 linenr, sendmailcf_fn);
+                     break;
+                 }
+-                strcpy(sendmailst_fn, line + 2);
++                strlcpy(sendmailst_fn, line + 2, sizeof(sendmailst_fn));
+                 found_sendmailst = TRUE;
+                 DEBUGMSGTL(("mibII/mta_sendmail.c:read_sendmailcf",
+                             "found statatistics file \"%s\"\n",
+diff --git a/agent/mibgroup/mibII/system_mib.c b/agent/mibgroup/mibII/system_mib.c
+index 65b0b7c64..8010357e0 100644
+--- a/agent/mibgroup/mibII/system_mib.c
++++ b/agent/mibgroup/mibII/system_mib.c
+@@ -309,7 +309,7 @@ init_system_mib(void)
+           if (RegQueryValueEx(hKey, "RegisteredOwner", NULL, NULL,
+                               (LPBYTE)registeredOwner,
+                               &registeredOwnerSz) == ERROR_SUCCESS) {
+-              strcpy(sysContact, registeredOwner);
++              strlcpy(sysContact, registeredOwner, sizeof(sysContact));
+           }
+           RegCloseKey(hKey);
+       }
+diff --git a/agent/mibgroup/mibII/vacm_conf.c b/agent/mibgroup/mibII/vacm_conf.c
+index f2faf8653..c56ed099d 100644
+--- a/agent/mibgroup/mibII/vacm_conf.c
++++ b/agent/mibgroup/mibII/vacm_conf.c
+@@ -480,7 +480,7 @@ vacm_parse_authaccess(const char *token, char *confline)
+ 
+     for (i = 0; i <= VACM_MAX_VIEWS; i++) {
+         if (viewtypes & (1 << i)) {
+-            strcpy(ap->views[i], view);
++            strlcpy(ap->views[i], view, sizeof(ap->views[i]));
+         }
+     }
+     ap->contextMatch = prefix;
+@@ -542,7 +542,7 @@ vacm_parse_setaccess(const char *token, char *param)
+         return;
+     }
+ 
+-    strcpy(ap->views[viewnum], viewval);
++    strlcpy(ap->views[viewnum], viewval, sizeof(ap->views[viewnum]));
+     ap->contextMatch = iprefix;
+     ap->storageType = SNMP_STORAGE_PERMANENT;
+     ap->status = SNMP_ROW_ACTIVE;
+@@ -598,9 +598,12 @@ vacm_parse_access(const char *token, char *param)
+         config_perror("failed to create access entry");
+         return;
+     }
+-    strcpy(ap->views[VACM_VIEW_READ], readView);
+-    strcpy(ap->views[VACM_VIEW_WRITE], writeView);
+-    strcpy(ap->views[VACM_VIEW_NOTIFY], notify);
++    strlcpy(ap->views[VACM_VIEW_READ], readView,
++            sizeof(ap->views[VACM_VIEW_READ]));
++    strlcpy(ap->views[VACM_VIEW_WRITE], writeView,
++            sizeof(ap->views[VACM_VIEW_WRITE]));
++    strlcpy(ap->views[VACM_VIEW_NOTIFY], notify,
++            sizeof(ap->views[VACM_VIEW_NOTIFY]));
+     ap->contextMatch = iprefix;
+     ap->storageType = SNMP_STORAGE_PERMANENT;
+     ap->status = SNMP_ROW_ACTIVE;
+diff --git a/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHParameters/usmDHParameters.c b/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHParameters/usmDHParameters.c
+index d28225d14..4e8388eab 100644
+--- a/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHParameters/usmDHParameters.c
++++ b/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHParameters/usmDHParameters.c
+@@ -12,6 +12,38 @@
+ 
+ static DH *dh_params = NULL;
+ 
++#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
++static int
++DH_set0_pqg(DH *dh, BIGNUM *p, BIGNUM *q, BIGNUM *g)
++{
++   /* If the fields p and g in d are NULL, the corresponding input
++    * parameters MUST be non-NULL.  q may remain NULL.
++    */
++   if ((dh->p == NULL && p == NULL)
++       || (dh->g == NULL && g == NULL))
++       return 0;
++
++   if (p != NULL) {
++       BN_free(dh->p);
++       dh->p = p;
++   }
++   if (q != NULL) {
++       BN_free(dh->q);
++       dh->q = q;
++   }
++   if (g != NULL) {
++       BN_free(dh->g);
++       dh->g = g;
++   }
++
++   if (q != NULL) {
++       dh->length = BN_num_bits(q);
++   }
++
++   return 1;
++}
++#endif
++
+ DH *
+ get_dh_params(void)
+ {
+@@ -22,6 +54,7 @@ get_dh_params(void)
+ void
+ init_usmDHParameters(void)
+ {
++    BIGNUM         *p, *g;
+     static oid      usmDHParameters_oid[] =
+         { 1, 3, 6, 1, 3, 101, 1, 1, 1 };
+ 
+@@ -38,9 +71,9 @@ init_usmDHParameters(void)
+        management apps though */
+     if (!dh_params) {
+         dh_params = DH_new();
+-        dh_params->g = BN_new();
+-        BN_hex2bn(&dh_params->g, "02");
+-        BN_hex2bn(&dh_params->p, "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece65381ffffffffffffffff");
++        BN_hex2bn(&g, "02");
++        BN_hex2bn(&p, "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece65381ffffffffffffffff");
++        DH_set0_pqg(dh_params, p, NULL, g);
+     }
+ }
+ 
+diff --git a/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHUserKeyTable/usmDHUserKeyTable_data_get.c b/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHUserKeyTable/usmDHUserKeyTable_data_get.c
+index 427d26f85..5fc9ca5d0 100644
+--- a/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHUserKeyTable/usmDHUserKeyTable_data_get.c
++++ b/agent/mibgroup/snmp-usm-dh-objects-mib/usmDHUserKeyTable/usmDHUserKeyTable_data_get.c
+@@ -20,10 +20,64 @@
+ #include "usmDHUserKeyTable.h"
+ #include "snmp-usm-dh-objects-mib/usmDHParameters/usmDHParameters.h"
+ 
++#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
++static int
++DH_set0_pqg(DH *dh, BIGNUM *p, BIGNUM *q, BIGNUM *g)
++{
++   /* If the fields p and g in d are NULL, the corresponding input
++    * parameters MUST be non-NULL.  q may remain NULL.
++    */
++   if ((dh->p == NULL && p == NULL)
++       || (dh->g == NULL && g == NULL))
++       return 0;
++
++   if (p != NULL) {
++       BN_free(dh->p);
++       dh->p = p;
++   }
++   if (q != NULL) {
++       BN_free(dh->q);
++       dh->q = q;
++   }
++   if (g != NULL) {
++       BN_free(dh->g);
++       dh->g = g;
++   }
++
++   if (q != NULL) {
++       dh->length = BN_num_bits(q);
++   }
++
++   return 1;
++}
++
++static void
++DH_get0_pqg(const DH *dh,
++            const BIGNUM **p, const BIGNUM **q, const BIGNUM **g)
++{
++   if (p != NULL)
++       *p = dh->p;
++   if (q != NULL)
++       *q = dh->q;
++   if (g != NULL)
++       *g = dh->g;
++}
++
++static void
++DH_get0_key(const DH *dh, const BIGNUM **pub_key, const BIGNUM **priv_key)
++{
++   if (pub_key != NULL)
++       *pub_key = dh->pub_key;
++   if (priv_key != NULL)
++       *priv_key = dh->priv_key;
++}
++#endif
++
+ DH             *
+ usmDHGetUserDHptr(struct usmUser *user, int for_auth_key)
+ {
+     DH             *dh, *dh_params;
++    const BIGNUM   *g, *p;
+     void          **theptr;
+ 
+     if (user == NULL)
+@@ -44,9 +98,10 @@ usmDHGetUserDHptr(struct usmUser *user, int for_auth_key)
+         dh_params = get_dh_params();
+         if (!dh_params)
+             return NULL;
+-        dh->g = BN_dup(dh_params->g);
+-        dh->p = BN_dup(dh_params->p);
+-        if (!dh->g || !dh->p)
++        DH_get0_pqg(dh_params, &p, NULL, &g);
++        DH_set0_pqg(dh, BN_dup(p), NULL, BN_dup(g));
++        DH_get0_pqg(dh, &p, NULL, &g);
++        if (!g || !p)
+             return NULL;
+         DH_generate_key(dh);
+         *theptr = dh;
+@@ -61,6 +116,7 @@ usmDHGetUserKeyChange(struct usmUser *user, int for_auth_key,
+                       u_char **keyobj, size_t *keyobj_len)
+ {
+     DH             *dh;
++    const BIGNUM   *pub_key;
+ 
+     dh = usmDHGetUserDHptr(user, for_auth_key);
+ 
+@@ -70,9 +126,10 @@ usmDHGetUserKeyChange(struct usmUser *user, int for_auth_key,
+         return MFD_ERROR;
+     }
+ 
+-    *keyobj_len = BN_num_bytes(dh->pub_key);
++    DH_get0_key(dh, &pub_key, NULL);
++    *keyobj_len = BN_num_bytes(pub_key);
+     *keyobj = malloc(*keyobj_len);
+-    BN_bn2bin(dh->pub_key, *keyobj);
++    BN_bn2bin(pub_key, *keyobj);
+ 
+     return MFD_SUCCESS;
+ }
+diff --git a/agent/mibgroup/target/snmpTargetParamsEntry.c b/agent/mibgroup/target/snmpTargetParamsEntry.c
+index 4e1f4e2bb..1d29d0b20 100644
+--- a/agent/mibgroup/target/snmpTargetParamsEntry.c
++++ b/agent/mibgroup/target/snmpTargetParamsEntry.c
+@@ -686,8 +686,7 @@ var_snmpTargetParamsEntry(struct variable * vp,
+         /*
+          * including null character. 
+          */
+-        memcpy(string, temp_struct->secName, strlen(temp_struct->secName));
+-        string[strlen(temp_struct->secName)] = '\0';
++        strlcpy((char *)string, temp_struct->secName, sizeof(string));
+         *var_len = strlen(temp_struct->secName);
+         return (unsigned char *) string;
+ 
+diff --git a/agent/mibgroup/ucd-snmp/logmatch.c b/agent/mibgroup/ucd-snmp/logmatch.c
+index 83b4e4aa7..1b77bf698 100644
+--- a/agent/mibgroup/ucd-snmp/logmatch.c
++++ b/agent/mibgroup/ucd-snmp/logmatch.c
+@@ -393,8 +393,9 @@ logmatch_parse_config(const char *token, char *cptr)
+                logmatchTable[logmatchCount].regEx);
+ 
+         /* fill in filename with initial data */
+-        strcpy(logmatchTable[logmatchCount].filename,
+-               logmatchTable[logmatchCount].filenamePattern);
++        strlcpy(logmatchTable[logmatchCount].filename,
++                logmatchTable[logmatchCount].filenamePattern,
++                sizeof(logmatchTable[logmatchCount].filename));
+         logmatch_update_filename(logmatchTable[logmatchCount].filenamePattern,
+                                  logmatchTable[logmatchCount].filename);
+ 
+diff --git a/agent/mibgroup/ucd-snmp/proc.c b/agent/mibgroup/ucd-snmp/proc.c
+index e90c2e8e3..874c2400a 100644
+--- a/agent/mibgroup/ucd-snmp/proc.c
++++ b/agent/mibgroup/ucd-snmp/proc.c
+@@ -168,7 +168,7 @@ procfix_parse_config(const char *token, char *cptr)
+         return;
+     }
+ 
+-    strcpy(procp->fixcmd, cptr);
++    strlcpy(procp->fixcmd, cptr, sizeof(procp->fixcmd));
+ }
+ 
+ 
+diff --git a/agent/mibgroup/util_funcs.c b/agent/mibgroup/util_funcs.c
+index 54068c6e7..ac265bf97 100644
+--- a/agent/mibgroup/util_funcs.c
++++ b/agent/mibgroup/util_funcs.c
+@@ -258,7 +258,7 @@ get_exec_output(struct extensible *ex)
+     curtime = time(NULL);
+     if (curtime > (cachetime + NETSNMP_EXCACHETIME) ||
+         strcmp(ex->command, lastcmd) != 0) {
+-        strcpy(lastcmd, ex->command);
++        strlcpy(lastcmd, ex->command, sizeof(lastcmd));
+         cachetime = curtime;
+ #endif
+ 
+diff --git a/agent/mibgroup/util_funcs/get_pid_from_inode.c b/agent/mibgroup/util_funcs/get_pid_from_inode.c
+index 8e157ae9f..aee907dd0 100644
+--- a/agent/mibgroup/util_funcs/get_pid_from_inode.c
++++ b/agent/mibgroup/util_funcs/get_pid_from_inode.c
+@@ -2,6 +2,7 @@
+ 
+ #include "get_pid_from_inode.h"
+ 
++#include <net-snmp/library/system.h> /* strlcpy() */
+ #include <net-snmp/output_api.h>
+ 
+ #include <ctype.h>
+@@ -144,7 +145,8 @@ netsnmp_get_pid_from_inode_init(void)
+             if (filelen + strlen(pidinfo->d_name) > PATH_MAX)
+                 continue;
+ 
+-            strcpy(path_name + filelen, pidinfo->d_name);
++            strlcpy(path_name + filelen, pidinfo->d_name,
++                    sizeof(path_name) - filelen);
+ 
+             /* The file discriptor is a symbolic link to a socket or a file.*/
+             /* Thus read the symbolic link.*/
+diff --git a/apps/snmpusm.c b/apps/snmpusm.c
+index 42919bde4..5dd114748 100644
+--- a/apps/snmpusm.c
++++ b/apps/snmpusm.c
+@@ -125,6 +125,39 @@ char           *usmUserPublic_val = NULL;
+ int             docreateandwait = 0;
+ 
+ 
++#if !defined(HAVE_DH_GET0_PQG)
++
++#include <string.h>
++#include <openssl/dh.h>
++
++void DH_get0_pqg(const DH *dh,
++                const BIGNUM **p, const BIGNUM **q, const BIGNUM **g)
++{
++   if (p != NULL)
++       *p = dh->p;
++   if (q != NULL)
++       *q = dh->q;
++   if (g != NULL)
++       *g = dh->g;
++}
++
++#endif
++
++#if defined(HAVE_OPENSSL_DH_H) && !defined(HAVE_DH_GET0_KEY)
++
++#include <string.h>
++#include <openssl/dh.h>
++
++void DH_get0_key(const DH *dh, const BIGNUM **pub_key, const BIGNUM **priv_key)
++{
++   if (pub_key != NULL)
++       *pub_key = dh->pub_key;
++   if (priv_key != NULL)
++       *priv_key = dh->priv_key;
++}
++
++#endif
++
+ void
+ usage(void)
+ {
+@@ -190,7 +223,7 @@ get_USM_DH_key(netsnmp_variable_list *vars, netsnmp_variable_list *dhvar,
+                oid *keyoid, size_t keyoid_len) {
+     u_char *dhkeychange;
+     DH *dh;
+-    BIGNUM *other_pub;
++    BIGNUM *p, *g, *pub_key, *other_pub;
+     u_char *key;
+     size_t key_len;
+             
+@@ -205,25 +238,29 @@ get_USM_DH_key(netsnmp_variable_list *vars, netsnmp_variable_list *dhvar,
+         dh = d2i_DHparams(NULL, &cp, dhvar->val_len);
+     }
+ 
+-    if (!dh || !dh->g || !dh->p) {
++    if (dh)
++        DH_get0_pqg(dh, &p, NULL, &g);
++
++    if (!dh || !g || !p) {
+         SNMP_FREE(dhkeychange);
+         return SNMPERR_GENERR;
+     }
+ 
+-    DH_generate_key(dh);
+-    if (!dh->pub_key) {
++    if (!DH_generate_key(dh)) {
+         SNMP_FREE(dhkeychange);
+         return SNMPERR_GENERR;
+     }
+             
+-    if (vars->val_len != (unsigned int)BN_num_bytes(dh->pub_key)) {
++    DH_get0_key(dh, &pub_key, NULL);
++
++    if (vars->val_len != (unsigned int)BN_num_bytes(pub_key)) {
+         SNMP_FREE(dhkeychange);
+         fprintf(stderr,"incorrect diffie-helman lengths (%lu != %d)\n",
+-                (unsigned long)vars->val_len, BN_num_bytes(dh->pub_key));
++                (unsigned long)vars->val_len, BN_num_bytes(pub_key));
+         return SNMPERR_GENERR;
+     }
+ 
+-    BN_bn2bin(dh->pub_key, dhkeychange + vars->val_len);
++    BN_bn2bin(pub_key, dhkeychange + vars->val_len);
+ 
+     key_len = DH_size(dh);
+     if (!key_len) {
+diff --git a/configure b/configure
+index 433ba5ba2..d7e6bbc64 100755
+--- a/configure
++++ b/configure
+@@ -23186,13 +23186,76 @@ eval ac_res=\$$as_ac_Lib
+ $as_echo "$ac_res" >&6; }
+ if eval test \"x\$"$as_ac_Lib"\" = x"yes"; then :
+ 
+-$as_echo "#define HAVE_EVP_MD_CTX_CREATE /**/" >>confdefs.h
++$as_echo "#define HAVE_EVP_MD_CTX_CREATE 1" >>confdefs.h
+ 
+ 
+-$as_echo "#define HAVE_EVP_MD_CTX_DESTROY /**/" >>confdefs.h
++$as_echo "#define HAVE_EVP_MD_CTX_DESTROY 1" >>confdefs.h
+ 
+ fi
+ 
++
++            as_ac_Lib=`$as_echo "ac_cv_lib_${CRYPTO}''_EVP_MD_CTX_new" | $as_tr_sh`
++{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for EVP_MD_CTX_new in -l${CRYPTO}" >&5
++$as_echo_n "checking for EVP_MD_CTX_new in -l${CRYPTO}... " >&6; }
++if eval \${$as_ac_Lib+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  ac_check_lib_save_LIBS=$LIBS
++LIBS="-l${CRYPTO}  $LIBS"
++cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++char EVP_MD_CTX_new ();
++int
++main ()
++{
++return EVP_MD_CTX_new ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"; then :
++  eval "$as_ac_Lib=yes"
++else
++  eval "$as_ac_Lib=no"
++fi
++rm -f core conftest.err conftest.$ac_objext \
++    conftest$ac_exeext conftest.$ac_ext
++LIBS=$ac_check_lib_save_LIBS
++fi
++eval ac_res=\$$as_ac_Lib
++	       { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
++$as_echo "$ac_res" >&6; }
++if eval test \"x\$"$as_ac_Lib"\" = x"yes"; then :
++
++$as_echo "#define HAVE_EVP_MD_CTX_NEW 1" >>confdefs.h
++
++
++$as_echo "#define HAVE_EVP_MD_CTX_FREE 1" >>confdefs.h
++
++fi
++
++            save_LIBS=$LIBS
++            LIBS="$LIBS -l${CRYPTO}"
++            for ac_func in DH_get0_pqg DH_get0_key                               X509_NAME_ENTRY_get_data                              X509_NAME_ENTRY_get_object                            X509_get_signature_nid
++do :
++  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
++ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
++if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
++  cat >>confdefs.h <<_ACEOF
++#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
++_ACEOF
++
++fi
++done
++
++            LIBS=$save_LIBS
+         fi
+         if echo " $transport_result_list " | $GREP "DTLS" > /dev/null; then
+ 	    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for DTLSv1_method in -lssl" >&5
+@@ -23249,7 +23312,7 @@ if ${ac_cv_lib_ssl_SSL_library_init+:} false; then :
+   $as_echo_n "(cached) " >&6
+ else
+   ac_check_lib_save_LIBS=$LIBS
+-LIBS="-lssl -lcrypto $LIBS"
++LIBS="-lssl  $LIBS"
+ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+ 
+@@ -23283,11 +23346,55 @@ if test "x$ac_cv_lib_ssl_SSL_library_init" = xyes; then :
+ 
+ $as_echo "#define HAVE_LIBSSL 1" >>confdefs.h
+ 
++fi
++
++	    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for OPENSSL_init_ssl in -lssl" >&5
++$as_echo_n "checking for OPENSSL_init_ssl in -lssl... " >&6; }
++if ${ac_cv_lib_ssl_OPENSSL_init_ssl+:} false; then :
++  $as_echo_n "(cached) " >&6
++else
++  ac_check_lib_save_LIBS=$LIBS
++LIBS="-lssl  $LIBS"
++cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++/* Override any GCC internal prototype to avoid an error.
++   Use char because int might match the return type of a GCC
++   builtin and then its argument prototype would still apply.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++char OPENSSL_init_ssl ();
++int
++main ()
++{
++return OPENSSL_init_ssl ();
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"; then :
++  ac_cv_lib_ssl_OPENSSL_init_ssl=yes
++else
++  ac_cv_lib_ssl_OPENSSL_init_ssl=no
++fi
++rm -f core conftest.err conftest.$ac_objext \
++    conftest$ac_exeext conftest.$ac_ext
++LIBS=$ac_check_lib_save_LIBS
++fi
++{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ssl_OPENSSL_init_ssl" >&5
++$as_echo "$ac_cv_lib_ssl_OPENSSL_init_ssl" >&6; }
++if test "x$ac_cv_lib_ssl_OPENSSL_init_ssl" = xyes; then :
++
++$as_echo "#define HAVE_LIBSSL 1" >>confdefs.h
++
++fi
++
++	    if test "$ac_cv_lib_ssl_SSL_library_init" = yes -o "$ac_cv_lib_ssl_OPENSSL_init_ssl" = yes; then
+                 LIBCRYPTO=" -lssl $LIBCRYPTO"
+ else
+   as_fn_error $? "The DTLS based transports require the libssl library from OpenSSL to be available" "$LINENO" 5
+ fi
+-
+             TLSPROG=yes
+         fi
+         if echo " $transport_result_list " | $GREP " SSH " > /dev/null; then
+diff --git a/configure.d/config_os_libs2 b/configure.d/config_os_libs2
+index 47491e24c..913457522 100644
+--- a/configure.d/config_os_libs2
++++ b/configure.d/config_os_libs2
+@@ -293,10 +293,23 @@ if test "x$tryopenssl" != "xno" -a "x$tryopenssl" != "xinternal"; then
+                     [Define to 1 if you have the `AES_cfb128_encrypt' function.]))
+ 
+             AC_CHECK_LIB(${CRYPTO}, EVP_MD_CTX_create,
+-                AC_DEFINE([HAVE_EVP_MD_CTX_CREATE], [],
++                AC_DEFINE([HAVE_EVP_MD_CTX_CREATE], [1],
+                     [Define to 1 if you have the `EVP_MD_CTX_create' function.])
+-                AC_DEFINE([HAVE_EVP_MD_CTX_DESTROY], [],
++                AC_DEFINE([HAVE_EVP_MD_CTX_DESTROY], [1],
+                     [Define to 1 if you have the `EVP_MD_CTX_destroy' function.]))
++
++            AC_CHECK_LIB(${CRYPTO}, EVP_MD_CTX_new,
++                AC_DEFINE([HAVE_EVP_MD_CTX_NEW], [1],
++                    [Define to 1 if you have the `EVP_MD_CTX_new' function.])
++                AC_DEFINE([HAVE_EVP_MD_CTX_FREE], [1],
++                    [Define to 1 if you have the `EVP_MD_CTX_free' function.]))
++            save_LIBS=$LIBS
++            LIBS="$LIBS -l${CRYPTO}"
++            AC_CHECK_FUNCS([DH_get0_pqg DH_get0_key   ] dnl
++                           [X509_NAME_ENTRY_get_data  ] dnl
++                           [X509_NAME_ENTRY_get_object] dnl
++                           [X509_get_signature_nid])
++            LIBS=$save_LIBS
+         fi
+         if echo " $transport_result_list " | $GREP "DTLS" > /dev/null; then
+ 	    AC_CHECK_LIB(ssl, DTLSv1_method,
+@@ -309,9 +322,15 @@ if test "x$tryopenssl" != "xno" -a "x$tryopenssl" != "xinternal"; then
+         if echo " $transport_result_list " | $GREP "TLS" > /dev/null; then
+ 	    AC_CHECK_LIB(ssl, SSL_library_init,
+                 AC_DEFINE(HAVE_LIBSSL, 1,
+-                    [Define to 1 if you have the `ssl' library (-lssl).])
+-                LIBCRYPTO=" -lssl $LIBCRYPTO",	
+-		AC_MSG_ERROR([The DTLS based transports require the libssl library from OpenSSL to be available])	,-lcrypto)
++                    [Define to 1 if you have the `ssl' library (-lssl).]))
++	    AC_CHECK_LIB(ssl, OPENSSL_init_ssl,
++                AC_DEFINE(HAVE_LIBSSL, 1,
++                    [Define to 1 if you have the `ssl' library (-lssl).]))
++	    if test "$ac_cv_lib_ssl_SSL_library_init" = yes -o "$ac_cv_lib_ssl_OPENSSL_init_ssl" = yes; then
++                LIBCRYPTO=" -lssl $LIBCRYPTO"
++	    else
++		AC_MSG_ERROR([The DTLS based transports require the libssl library from OpenSSL to be available])
++	    fi
+             TLSPROG=yes
+         fi
+         if echo " $transport_result_list " | $GREP " SSH " > /dev/null; then
+diff --git a/include/net-snmp/net-snmp-config.h.in b/include/net-snmp/net-snmp-config.h.in
+index 1db02379b..70389cd97 100644
+--- a/include/net-snmp/net-snmp-config.h.in
++++ b/include/net-snmp/net-snmp-config.h.in
+@@ -124,6 +124,12 @@
+ /* define if you have devstat_getdevs() */
+ #undef HAVE_DEVSTAT_GETDEVS
+ 
++/* Define to 1 if you have the `DH_get0_key' function. */
++#undef HAVE_DH_GET0_KEY
++
++/* Define to 1 if you have the `DH_get0_pqg' function. */
++#undef HAVE_DH_GET0_PQG
++
+ /* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
+    */
+ #undef HAVE_DIRENT_H
+@@ -155,6 +161,12 @@
+ /* Define to 1 if you have the `EVP_MD_CTX_destroy' function. */
+ #undef HAVE_EVP_MD_CTX_DESTROY
+ 
++/* Define to 1 if you have the `EVP_MD_CTX_free' function. */
++#undef HAVE_EVP_MD_CTX_FREE
++
++/* Define to 1 if you have the `EVP_MD_CTX_new' function. */
++#undef HAVE_EVP_MD_CTX_NEW
++
+ /* Define if you have EVP_sha224/256 in openssl */
+ #undef HAVE_EVP_SHA224
+ 
+@@ -1298,6 +1310,15 @@
+ /* Define to 1 if you have the <ws2tcpip.h> header file. */
+ #undef HAVE_WS2TCPIP_H
+ 
++/* Define to 1 if you have the `X509_get_signature_nid' function. */
++#undef HAVE_X509_GET_SIGNATURE_NID
++
++/* Define to 1 if you have the `X509_NAME_ENTRY_get_data' function. */
++#undef HAVE_X509_NAME_ENTRY_GET_DATA
++
++/* Define to 1 if you have the `X509_NAME_ENTRY_get_object' function. */
++#undef HAVE_X509_NAME_ENTRY_GET_OBJECT
++
+ /* Define to 1 if you have the <xti.h> header file. */
+ #undef HAVE_XTI_H
+ 
+diff --git a/snmplib/keytools.c b/snmplib/keytools.c
+index 0ccb3a673..0db988810 100644
+--- a/snmplib/keytools.c
++++ b/snmplib/keytools.c
+@@ -149,7 +149,9 @@ generate_Ku(const oid * hashtype, u_int hashtype_len,
+      */
+ #ifdef NETSNMP_USE_OPENSSL
+ 
+-#ifdef HAVE_EVP_MD_CTX_CREATE
++#ifdef HAVE_EVP_MD_CTX_NEW
++    ctx = EVP_MD_CTX_new();
++#elif HAVE_EVP_MD_CTX_CREATE
+     ctx = EVP_MD_CTX_create();
+ #else
+     ctx = malloc(sizeof(*ctx));
+@@ -259,7 +261,9 @@ generate_Ku(const oid * hashtype, u_int hashtype_len,
+     memset(buf, 0, sizeof(buf));
+ #ifdef NETSNMP_USE_OPENSSL
+     if (ctx) {
+-#ifdef HAVE_EVP_MD_CTX_DESTROY
++#ifdef HAVE_EVP_MD_CTX_FREE
++        EVP_MD_CTX_free(ctx);
++#elif HAVE_EVP_MD_CTX_DESTROY
+         EVP_MD_CTX_destroy(ctx);
+ #else
+         EVP_MD_CTX_cleanup(ctx);
+diff --git a/snmplib/scapi.c b/snmplib/scapi.c
+index 16ac8296f..6693a623c 100644
+--- a/snmplib/scapi.c
++++ b/snmplib/scapi.c
+@@ -486,7 +486,9 @@ sc_hash(const oid * hashtype, size_t hashtypelen, const u_char * buf,
+     }
+ 
+ /** initialize the pointer */
+-#ifdef HAVE_EVP_MD_CTX_CREATE
++#ifdef HAVE_EVP_MD_CTX_NEW
++    cptr = EVP_MD_CTX_new();
++#elif HAVE_EVP_MD_CTX_CREATE
+     cptr = EVP_MD_CTX_create();
+ #else
+     cptr = malloc(sizeof(*cptr));
+@@ -507,7 +509,9 @@ sc_hash(const oid * hashtype, size_t hashtypelen, const u_char * buf,
+ /** do the final pass */
+     EVP_DigestFinal(cptr, MAC, &tmp_len);
+     *MAC_len = tmp_len;
+-#ifdef HAVE_EVP_MD_CTX_DESTROY
++#ifdef HAVE_EVP_MD_CTX_FREE
++    EVP_MD_CTX_free(cptr);
++#elif HAVE_EVP_MD_CTX_DESTROY
+     EVP_MD_CTX_destroy(cptr);
+ #else
+ #if !defined(OLD_DES)
+diff --git a/snmplib/snmp_openssl.c b/snmplib/snmp_openssl.c
+index 3b0eaa837..2337446d0 100644
+--- a/snmplib/snmp_openssl.c
++++ b/snmplib/snmp_openssl.c
+@@ -141,6 +141,28 @@ netsnmp_openssl_cert_get_commonName(X509 *ocert, char **buf, int *len)
+ }
+ 
+ #ifndef NETSNMP_FEATURE_REMOVE_CERT_DUMP_NAMES
++
++#ifndef HAVE_X509_NAME_ENTRY_GET_DATA
++static ASN1_STRING * X509_NAME_ENTRY_get_data(const X509_NAME_ENTRY *ne)
++{
++    return ne ? ne->value : NULL;
++}
++#endif
++
++#ifndef HAVE_X509_NAME_ENTRY_GET_OBJECT
++static ASN1_OBJECT *X509_NAME_ENTRY_get_object(const X509_NAME_ENTRY *ne)
++{
++    return ne ? ne->object : NULL;
++}
++#endif
++
++#ifndef HAVE_X509_GET_SIGNATURE_NID
++static int X509_get_signature_nid(const X509 *x)
++{
++    return OBJ_obj2nid(x->sig_alg->algorithm);
++}
++#endif
++
+ /** netsnmp_openssl_cert_dump_name: dump subject names in cert
+  */
+ void
+@@ -148,6 +170,7 @@ netsnmp_openssl_cert_dump_names(X509 *ocert)
+ {
+     int              i, onid;
+     X509_NAME_ENTRY *oname_entry;
++    ASN1_STRING     *oname_value;
+     X509_NAME       *osubj_name;
+     const char      *prefix_short, *prefix_long;
+ 
+@@ -163,12 +186,13 @@ netsnmp_openssl_cert_dump_names(X509 *ocert)
+     for (i = 0; i < X509_NAME_entry_count(osubj_name); i++) {
+         oname_entry = X509_NAME_get_entry(osubj_name, i);
+         netsnmp_assert(NULL != oname_entry);
++        oname_value = X509_NAME_ENTRY_get_data(oname_entry);
+ 
+-        if (oname_entry->value->type != V_ASN1_PRINTABLESTRING)
++        if (oname_value->type != V_ASN1_PRINTABLESTRING)
+             continue;
+ 
+         /** get NID */
+-        onid = OBJ_obj2nid(oname_entry->object);
++        onid = OBJ_obj2nid(X509_NAME_ENTRY_get_object(oname_entry));
+         if (onid == NID_undef) {
+             prefix_long = prefix_short = "UNKNOWN";
+         }
+@@ -179,9 +203,9 @@ netsnmp_openssl_cert_dump_names(X509 *ocert)
+ 
+         DEBUGMSGT(("9:cert:dump:names",
+                    "[%02d] NID type %d, ASN type %d\n", i, onid,
+-                   oname_entry->value->type));
++                   oname_value->type));
+         DEBUGMSGT(("9:cert:dump:names", "%s/%s: '%s'\n", prefix_long,
+-                   prefix_short, ASN1_STRING_data(oname_entry->value)));
++                   prefix_short, ASN1_STRING_data(oname_value)));
+     }
+ }
+ #endif /* NETSNMP_FEATURE_REMOVE_CERT_DUMP_NAMES */
+@@ -470,7 +494,7 @@ netsnmp_openssl_cert_get_hash_type(X509 *ocert)
+     if (NULL == ocert)
+         return 0;
+ 
+-    return _nid2ht(OBJ_obj2nid(ocert->sig_alg->algorithm));
++    return _nid2ht(X509_get_signature_nid(ocert));
+ }
+ 
+ /**
+@@ -487,7 +511,7 @@ netsnmp_openssl_cert_get_fingerprint(X509 *ocert, int alg)
+     if (NULL == ocert)
+         return NULL;
+ 
+-    nid = OBJ_obj2nid(ocert->sig_alg->algorithm);
++    nid = X509_get_signature_nid(ocert);
+     DEBUGMSGT(("9:openssl:fingerprint", "alg %d, cert nid %d (%d)\n", alg, nid,
+                _nid2ht(nid)));
+         
+diff --git a/snmplib/vacm.c b/snmplib/vacm.c
+index c6397855a..bce0186c7 100644
+--- a/snmplib/vacm.c
++++ b/snmplib/vacm.c
+@@ -54,6 +54,7 @@
+ #include <net-snmp/config_api.h>
+ 
+ #include <net-snmp/library/snmp_api.h>
++#include <net-snmp/library/system.h> /* strlcpy() */
+ #include <net-snmp/library/tools.h>
+ #include <net-snmp/library/vacm.h>
+ 
+@@ -439,7 +440,7 @@ netsnmp_view_get(struct vacm_viewEntry *head, const char *viewName,
+     if (glen < 0 || glen > VACM_MAX_STRING)
+         return NULL;
+     view[0] = glen;
+-    strcpy(view + 1, viewName);
++    strlcpy(view + 1, viewName, sizeof(view) - 1);
+     for (vp = head; vp; vp = vp->next) {
+         if (!memcmp(view, vp->viewName, glen + 1)
+             && viewSubtreeLen >= (vp->viewSubtreeLen - 1)) {
+@@ -522,7 +523,7 @@ netsnmp_view_subtree_check(struct vacm_viewEntry *head, const char *viewName,
+     if (glen < 0 || glen > VACM_MAX_STRING)
+         return VACM_NOTINVIEW;
+     view[0] = glen;
+-    strcpy(view + 1, viewName);
++    strlcpy(view + 1, viewName, sizeof(view) - 1);
+     DEBUGMSGTL(("9:vacm:checkSubtree", "view %s\n", viewName));
+     for (vp = head; vp; vp = vp->next) {
+         if (!memcmp(view, vp->viewName, glen + 1)) {
+@@ -689,7 +690,7 @@ netsnmp_view_create(struct vacm_viewEntry **head, const char *viewName,
+     }
+ 
+     vp->viewName[0] = glen;
+-    strcpy(vp->viewName + 1, viewName);
++    strlcpy(vp->viewName + 1, viewName, sizeof(vp->viewName) - 1);
+     vp->viewSubtree[0] = viewSubtreeLen;
+     memcpy(vp->viewSubtree + 1, viewSubtree, viewSubtreeLen * sizeof(oid));
+     vp->viewSubtreeLen = viewSubtreeLen + 1;
+@@ -768,7 +769,7 @@ vacm_getGroupEntry(int securityModel, const char *securityName)
+     if (glen < 0 || glen > VACM_MAX_STRING)
+         return NULL;
+     secname[0] = glen;
+-    strcpy(secname + 1, securityName);
++    strlcpy(secname + 1, securityName, sizeof(secname) - 1);
+ 
+     for (vp = groupList; vp; vp = vp->next) {
+         if ((securityModel == vp->securityModel
+@@ -817,7 +818,7 @@ vacm_createGroupEntry(int securityModel, const char *securityName)
+ 
+     gp->securityModel = securityModel;
+     gp->securityName[0] = glen;
+-    strcpy(gp->securityName + 1, securityName);
++    strlcpy(gp->securityName + 1, securityName, sizeof(gp->securityName) - 1);
+ 
+     lg = groupList;
+     og = NULL;
+@@ -939,9 +940,9 @@ vacm_getAccessEntry(const char *groupName,
+         return NULL;
+ 
+     group[0] = glen;
+-    strcpy(group + 1, groupName);
++    strlcpy(group + 1, groupName, sizeof(group) - 1);
+     context[0] = clen;
+-    strcpy(context + 1, contextPrefix);
++    strlcpy(context + 1, contextPrefix, sizeof(context) - 1);
+     for (vp = accessList; vp; vp = vp->next) {
+         if ((securityModel == vp->securityModel
+              || vp->securityModel == SNMP_SEC_MODEL_ANY)
+@@ -1006,9 +1007,10 @@ vacm_createAccessEntry(const char *groupName,
+     vp->securityModel = securityModel;
+     vp->securityLevel = securityLevel;
+     vp->groupName[0] = glen;
+-    strcpy(vp->groupName + 1, groupName);
++    strlcpy(vp->groupName + 1, groupName, sizeof(vp->groupName) - 1);
+     vp->contextPrefix[0] = clen;
+-    strcpy(vp->contextPrefix + 1, contextPrefix);
++    strlcpy(vp->contextPrefix + 1, contextPrefix,
++            sizeof(vp->contextPrefix) - 1);
+ 
+     lp = accessList;
+     while (lp) {
+diff --git a/win32/net-snmp/net-snmp-config.h b/win32/net-snmp/net-snmp-config.h
+index 1608563b5..0cc123c6c 100644
+--- a/win32/net-snmp/net-snmp-config.h
++++ b/win32/net-snmp/net-snmp-config.h
+@@ -250,6 +250,21 @@
+ /* Define to 1 if you have the <direct.h> header file. */
+ #define HAVE_DIRECT_H 1
+ 
++/* Define to 1 if you have the `DH_get0_key' function. */
++#define HAVE_DH_GET0_KEY 1
++
++/* Define to 1 if you have the `DH_get0_pqg' function. */
++#define HAVE_DH_GET0_PQG 1
++
++/* Define to 1 if you have the `X509_get_signature_nid' function. */
++#define HAVE_X509_GET_SIGNATURE_NID 1
++
++/* Define to 1 if you have the `X509_NAME_ENTRY_get_data' function. */
++#define HAVE_X509_NAME_ENTRY_GET_DATA 1
++
++/* Define to 1 if you have the `X509_NAME_ENTRY_get_object' function. */
++#define HAVE_X509_NAME_ENTRY_GET_OBJECT 1
++
+ /* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
+    */
+ /* #undef HAVE_DIRENT_H */
+diff --git a/win32/net-snmp/net-snmp-config.h.in b/win32/net-snmp/net-snmp-config.h.in
+index 969373012..d576d6c5e 100644
+--- a/win32/net-snmp/net-snmp-config.h.in
++++ b/win32/net-snmp/net-snmp-config.h.in
+@@ -250,6 +250,21 @@
+ /* Define to 1 if you have the <direct.h> header file. */
+ #define HAVE_DIRECT_H 1
+ 
++/* Define to 1 if you have the `DH_get0_key' function. */
++#define HAVE_DH_GET0_KEY 1
++
++/* Define to 1 if you have the `DH_get0_pqg' function. */
++#define HAVE_DH_GET0_PQG 1
++
++/* Define to 1 if you have the `X509_get_signature_nid' function. */
++#define HAVE_X509_GET_SIGNATURE_NID 1
++
++/* Define to 1 if you have the `X509_NAME_ENTRY_get_data' function. */
++#define HAVE_X509_NAME_ENTRY_GET_DATA 1
++
++/* Define to 1 if you have the `X509_NAME_ENTRY_get_object' function. */
++#define HAVE_X509_NAME_ENTRY_GET_OBJECT 1
++
+ /* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
+    */
+ /* #undef HAVE_DIRENT_H */
+-- 
+2.12.3

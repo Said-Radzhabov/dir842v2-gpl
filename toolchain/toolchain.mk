@@ -1,0 +1,111 @@
+TOOLCHAIN_VERSION = $(call qstrip,$(BR2_TOOLCHAIN_EXTERNAL_VERSION))
+ifeq ($(TOOLCHAIN_VERSION),)
+TOOLCHAIN_VERSION = master
+endif
+
+TOOLCHAIN_DIR=$(BASE_DIR)/toolchains
+
+.PHONY: toolchain toolchain-source toolchain-extract
+
+#18758
+ifeq ($(BR2_TOOLCHAIN_USES_MUSL),y)
+TARGET_CFLAGS += -DMUSL_LIBC
+endif
+
+#
+# Definitions of the list of libraries that should be copied to the target.
+#
+
+TOOLCHAIN_EXTERNAL_LIBS += ld*.so.* libgcc_s.so.* libatomic.so.*
+ifeq ($(BR2_TOOLCHAIN_USES_GLIBC)$(BR2_TOOLCHAIN_USES_UCLIBC),y)
+TOOLCHAIN_EXTERNAL_LIBS += libc.so.* libcrypt.so.* libdl.so.* libm.so.* libnsl.so.* libresolv.so.* librt.so.* libutil.so.*
+ifeq ($(BR2_TOOLCHAIN_HAS_THREADS),y)
+TOOLCHAIN_EXTERNAL_LIBS += libpthread.so.*
+endif # ! no threads
+endif
+
+ifeq ($(BR2_TOOLCHAIN_USES_UCLIBC),y)
+TOOLCHAIN_EXTERNAL_LIBS += libubacktrace.so.*
+endif
+
+ifeq ($(BR2_TOOLCHAIN_USES_GLIBC),y)
+TOOLCHAIN_EXTERNAL_LIBS += libnss_files.so.* libnss_dns.so.* libmvec.so.* libanl.so.*
+endif
+
+ifeq ($(BR2_TOOLCHAIN_USES_MUSL),y)
+TOOLCHAIN_EXTERNAL_LIBS += libc.so
+endif
+
+ifeq ($(BR2_INSTALL_LIBSTDCPP),y)
+TOOLCHAIN_EXTERNAL_LIBS += libstdc++.so.*
+endif
+
+TOOLCHAIN_EXTERNAL_LIBS += $(addsuffix .so*,$(call qstrip,$(BR2_TOOLCHAIN_EXTRA_LIBS)))
+
+toolchain: dirs rebuild_toolchainfile $(TOOLCHAIN_DIR)/.stamp_installed
+toolchain-source: $(TOOLCHAIN_DIR)/.stamp_downloaded
+toolchain-extract: $(TOOLCHAIN_DIR)/.stamp_extracted
+
+toolchain-clean-for-extract:
+	@rm -f $(TOOLCHAIN_DIR)/.stamp_extracted
+
+$(TOOLCHAIN_DIR)/.stamp_downloaded:
+	@$(call MESSAGE,"Downloading toolchain")
+	$(Q)git clone --depth 1 -b $(TOOLCHAIN_VERSION) git@rd:sdk_toolchains/$(BR2_TOOLCHAIN_EXTERNAL_LOCATION) $(BASE_DIR)/toolchains
+	$(Q)touch $@
+
+$(TOOLCHAIN_DIR)/.stamp_extracted: $(TOOLCHAIN_DIR)/.stamp_downloaded
+	@$(call MESSAGE,"Extracting toolchain")
+	$(Q)cp -aR $(TOOLCHAIN_DIR)/${BR2_USRINC_PATH}/* ${STAGING_DIR}/usr/include/
+	$(Q)cp -aR $(TOOLCHAIN_DIR)/${BR2_LIB_PATH}/* ${STAGING_DIR}/lib/
+ifneq ($(call qstrip,$(BR2_USRLIB_PATH)),)
+	$(Q)cp -aR $(TOOLCHAIN_DIR)/${BR2_USRLIB_PATH}/* ${STAGING_DIR}/usr/lib/
+endif
+	$(Q)chmod -R +w ${STAGING_DIR}/usr/include
+	$(Q)touch $@
+
+
+$(TOOLCHAIN_DIR)/.stamp_installed: $(TOOLCHAIN_DIR)/.stamp_extracted
+	$(Q)$(call MESSAGE,"Copying external toolchain libraries to target...")
+	$(Q)for libpattern in $(TOOLCHAIN_EXTERNAL_LIBS); do \
+		$(call copy_toolchain_lib_root,$$libpattern); \
+	done
+ifeq ($(BR2_TOOLCHAIN_USES_UCLIBC),y)
+	# uClibc-ng dynamic loader is called ld-uClibc.so.1, but gcc is not
+	# patched specifically for uClibc-ng, so it continues to generate
+	# binaries that expect the dynamic loader to be named ld-uClibc.so.0,
+	# like with the original uClibc. Therefore, we create an additional
+	# symbolic link to make uClibc-ng systems work properly.
+	$(Q)if test -e $(TARGET_DIR)/lib/ld-uClibc.so.1; then \
+		ln -sf ld-uClibc.so.1 $(TARGET_DIR)/lib/ld-uClibc.so.0 ; \
+	fi
+	$(Q)if test -e $(TARGET_DIR)/lib/ld64-uClibc.so.1; then \
+		ln -sf ld64-uClibc.so.1 $(TARGET_DIR)/lib/ld64-uClibc.so.0 ; \
+	fi
+endif
+	$(Q)touch $@
+
+include toolchain/helpers.mk
+include toolchain/gdb/gdb.mk
+
+rebuild_toolchainfile:
+	@echo -en "\
+	set(CMAKE_SYSTEM_NAME Linux)\n\
+	set(CMAKE_C_COMPILER $(CMAKE_TARGET_CC))\n\
+	set(CMAKE_CXX_COMPILER $(CMAKE_TARGET_CXX))\n\
+	set(CMAKE_C_FLAGS \"\$${CMAKE_C_FLAGS} $(CMAKE_TARGET_CFLAGS) -isystem ${STAGING_DIR}/usr/include\" CACHE STRING \"Buildroot CFLAGS\" FORCE)\n\
+	set(CMAKE_CXX_FLAGS \"\$${CMAKE_CXX_FLAGS} $(CMAKE_TARGET_CXXFLAGS)\" CACHE STRING \"Buildroot CXXFLAGS\" FORCE)\n\
+	include_directories(SYSTEM ${STAGING_DIR}/usr/include)\n\
+	set(CMAKE_INSTALL_SO_NO_EXE 0)\n\
+	set(CMAKE_PROGRAM_PATH \"$(HOST_DIR)/usr/bin;$(HOST_DIR)/usr/sbin\")\n\
+	set(CMAKE_FIND_ROOT_PATH \"$(STAGING_DIR)\")\n\
+	set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)\n\
+	set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)\n\
+	set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)\n\
+	set(ENV{PKG_CONFIG_SYSROOT_DIR} \"$(STAGING_DIR)\")\n\
+	set(CMAKE_EXE_LINKER_FLAGS \"${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath-link,$(STAGING_DIR)/lib -Wl,-rpath-link,$(STAGING_DIR)/usr/lib\" CACHE STRING \"Flags used by the linker during the creation of dll's.\")\n\
+	" > $(O)/toolchainfile.cmake.bak
+#farisey: заменим '"token"' на 'token'
+	@sed -ri s/\(\'\"\|\"\'\)/\'/g $(O)/toolchainfile.cmake.bak
+
+	@if ! cmp -s $(O)/toolchainfile.cmake $(O)/toolchainfile.cmake.bak; then mv $(O)/toolchainfile.cmake.bak $(O)/toolchainfile.cmake; else rm -f $(O)/toolchainfile.cmake.bak; fi

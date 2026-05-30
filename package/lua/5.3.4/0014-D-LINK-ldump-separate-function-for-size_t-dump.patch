@@ -1,0 +1,38 @@
+From 0ced69e0ced1c26a9ba7647a786ef155e5171177 Mon Sep 17 00:00:00 2001
+From: Alexander Safonov <asafonov@dlink.ru>
+Date: Tue, 22 Dec 2020 16:33:33 +0300
+Subject: [PATCH 1/2] [D-LINK] ldump: separate function for size_t dump
+
+Signed-off-by: Alexander Safonov <asafonov@dlink.ru>
+---
+ src/ldump.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/ldump.c b/src/ldump.c
+index 016e300..aa224b9 100644
+--- a/src/ldump.c
++++ b/src/ldump.c
+@@ -60,6 +60,11 @@ static void DumpInt (int x, DumpState *D) {
+ }
+ 
+ 
++static void DumpSize (size_t x, DumpState *D) {
++  DumpVar(x, D);
++}
++
++
+ static void DumpNumber (lua_Number x, DumpState *D) {
+   DumpVar(x, D);
+ }
+@@ -80,7 +85,7 @@ static void DumpString (const TString *s, DumpState *D) {
+       DumpByte(cast_int(size), D);
+     else {
+       DumpByte(0xFF, D);
+-      DumpVar(size, D);
++      DumpSize(size, D);
+     }
+     DumpVector(str, size - 1, D);  /* no need to save '\0' */
+   }
+-- 
+2.20.1
+

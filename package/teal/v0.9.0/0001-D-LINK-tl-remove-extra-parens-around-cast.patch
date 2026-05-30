@@ -1,0 +1,105 @@
+From 0e6e5a45090d11caf25d2810f7e42a7223444578 Mon Sep 17 00:00:00 2001
+From: Alexander Safonov <asafonov@dlink.ru>
+Date: Wed, 23 Dec 2020 18:47:51 +0300
+Subject: [D-LINK] tl: remove extra parens around cast
+
+Signed-off-by: Alexander Safonov <asafonov@dlink.ru>
+---
+ tl.lua | 16 ++++++++++++++--
+ tl.tl  | 14 +++++++++++++-
+ 2 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/tl.lua b/tl.lua
+index 7d2dad7..683d541 100644
+--- a/tl.lua
++++ b/tl.lua
+@@ -16,7 +16,7 @@ local LoadMode = {}
+ 
+ local LoadFunction = {}
+ 
+-local tl = {Env = {}, Result = {}, Error = {}, }
++local tl = {Env = {}, Error = {}, Result = {}, }
+ 
+ 
+ 
+@@ -2695,6 +2695,9 @@ function tl.pretty_print_ast(ast, mode)
+ 
+ 
+ 
++
++
++
+    local function increment_indent()
+       indent = indent + 1
+    end
+@@ -3082,9 +3085,17 @@ function tl.pretty_print_ast(ast, mode)
+       ["paren"] = {
+          after = function(node, children)
+             local out = { y = node.y, h = 0 }
++
+             table.insert(out, "(")
+             add_child(out, children[1], "", indent)
+-            table.insert(out, ")")
++
++
++            if children[1].is_cast then
++
++               table.remove(out, 1)
++            else
++               table.insert(out, ")")
++            end
+             return out
+          end,
+       },
+@@ -3103,6 +3114,7 @@ function tl.pretty_print_ast(ast, mode)
+                table.insert(out, "]")
+             elseif node.op.op == "as" then
+                add_child(out, children[1], "", indent)
++               out.is_cast = true
+             elseif node.op.op == "is" then
+                table.insert(out, "type(")
+                add_child(out, children[1], "", indent)
+diff --git a/tl.tl b/tl.tl
+index 7f5da47..bb4763c 100644
+--- a/tl.tl
++++ b/tl.tl
+@@ -2693,6 +2693,9 @@ function tl.pretty_print_ast(ast: Node, mode: boolean | PrettyPrintOpts): string
+       {string}
+       y: number
+       h: number
++
++      -- HACK: explicit mark for output of 'operator as'
++      is_cast: boolean
+    end
+ 
+    local function increment_indent()
+@@ -3082,9 +3085,17 @@ function tl.pretty_print_ast(ast: Node, mode: boolean | PrettyPrintOpts): string
+       ["paren"] = {
+          after = function(node: Node, children: {Output}): Output
+             local out: Output = { y = node.y, h = 0 }
++
+             table.insert(out, "(")
+             add_child(out, children[1], "", indent)
+-            table.insert(out, ")")
++
++            -- HACK: check if children[1] is an operator 'as' and remove parens in that case
++            if children[1].is_cast then
++                 -- remove the left paren
++                table.remove(out, 1)
++            else
++                table.insert(out, ")")
++            end
+             return out
+          end,
+       },
+@@ -3103,6 +3114,7 @@ function tl.pretty_print_ast(ast: Node, mode: boolean | PrettyPrintOpts): string
+                table.insert(out, "]")
+             elseif node.op.op == "as" then
+                add_child(out, children[1], "", indent)
++               out.is_cast = true
+             elseif node.op.op == "is" then
+                table.insert(out, "type(")
+                add_child(out, children[1], "", indent)
+-- 
+2.20.1
+

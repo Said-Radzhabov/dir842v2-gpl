@@ -1,0 +1,22 @@
+--- a/ip/xfrm_monitor.c
++++ b/ip/xfrm_monitor.c
+@@ -34,7 +34,7 @@
+ #include "ip_common.h"
+ 
+ static void usage(void) __attribute__((noreturn));
+-int listen_all_nsid;
++static int listen_all_nsid;
+ 
+ static void usage(void)
+ {
+--- a/ip/ipmroute.c
++++ b/ip/ipmroute.c
+@@ -44,7 +44,7 @@ static void usage(void)
+ 	exit(-1);
+ }
+ 
+-struct rtfilter {
++static struct rtfilter {
+ 	int tb;
+ 	int af;
+ 	int iif;

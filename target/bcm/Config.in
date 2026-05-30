@@ -1,0 +1,9 @@
+choice
+	prompt "Target Variant"
+	default BRCM_CHIP_63178
+config BRCM_CHIP_63178
+	bool "63178"
+	select arm
+endchoice
+
+

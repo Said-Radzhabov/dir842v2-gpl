@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBSTLPORT
+	bool "libstlport"
+	default n
+	help
+	  STLport is an implementation of the C++ Standard Library, as described in the INTERNATIONAL STANDARD ISO/IEC 14882:1998(E) and latest ISO/IEC 14882:2003(E).

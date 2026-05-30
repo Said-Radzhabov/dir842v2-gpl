@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBNL_TINY
+	bool "libnl-tiny"
+	depends on !BR2_PACKAGE_LIBNL
+	help
+		This package contains a stripped down version of libnl.

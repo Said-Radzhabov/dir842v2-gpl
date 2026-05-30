@@ -1,0 +1,33 @@
+From ee35a4d90f0ebf7df096cb0de232e9750659e524 Mon Sep 17 00:00:00 2001
+From: Maxim Zhukov <mzhukov@dlink.ru>
+Date: Fri, 15 Jan 2021 18:20:09 +0300
+Subject: [PATCH] add missing extern for head_cell
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Добавил недостоющий extern, иначе в каждом файле, который проинклудил
+данный файл будет дублироваться данная переменная, что приводит к
+ошибкам сборки на gcc10
+
+Signed-off-by: Maxim Zhukov <mzhukov@dlink.ru>
+---
+ src/roxml_mem.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/roxml_mem.h b/src/roxml_mem.h
+index aff6137..34a5070 100644
+--- a/src/roxml_mem.h
++++ b/src/roxml_mem.h
+@@ -14,7 +14,7 @@
+ 
+ #include "roxml_internal.h"
+ 
+-memory_cell_t head_cell;
++extern memory_cell_t head_cell;
+ 
+ /** \brief alloc memory function
+  *
+-- 
+2.29.2
+

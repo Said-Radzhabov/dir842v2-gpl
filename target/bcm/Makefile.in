@@ -1,0 +1,9 @@
+###################################
+#  BRCM
+###################################
+
+TARGET_CFLAGS += -DBRCM_NEW_ARM
+TARGETS += bcm_buildFS
+
+bcm_buildFS:
+	-@$(PROFILE_DIR)/buildFS $(PROFILE_DIR) $(TARGET_DIR)

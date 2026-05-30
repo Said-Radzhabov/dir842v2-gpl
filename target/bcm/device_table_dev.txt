@@ -1,0 +1,8 @@
+# vim: noexpandtab:ts=8:sw=8
+/dev/ttyAMA0	c	666	0	0	204	64	0	0	-
+/dev/ubi0	c	666	0	0	252	0	0	0	-
+/dev/blog	c	666	0	0	338	0	0	0	-
+/dev/archer c 	666	0	0	339	0	0	0	-
+/dev/bcm 	c 	666	0	0	331	0	0	0	-
+/dev/bcmvlan 	c 	666	0	0	323	0	0	0	-
+/dev/pktrunner 	c 	666	0	0	309	0	0	0	-

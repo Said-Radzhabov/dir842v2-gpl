@@ -1,0 +1,28 @@
+From 4e1d0502fcb0b00380e5fa51751b53aa2120386b Mon Sep 17 00:00:00 2001
+From: farisey <anikulin@dlink.ru>
+Date: Thu, 4 Apr 2019 10:49:39 +0300
+Subject: [PATCH] Add uptime for LDP routes.
+
+show ip route:
+
+L>* 9.9.9.9/32 [0/0] via 10.90.8.100, eth3 label 1001, 00:02:15
+                                                       ^^^^^^^^
+---
+ zebra/zebra_vty.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/zebra/zebra_vty.c b/zebra/zebra_vty.c
+index 8986251e..8680547c 100644
+--- a/zebra/zebra_vty.c
++++ b/zebra/zebra_vty.c
+@@ -2556,6 +2556,7 @@ vty_show_ip_route (struct vty *vty, struct route_node *rn, struct rib *rib)
+           || rib->type == ZEBRA_ROUTE_OSPF
+           || rib->type == ZEBRA_ROUTE_OSPF6
+           || rib->type == ZEBRA_ROUTE_BABEL
++          || rib->type == ZEBRA_ROUTE_LDP
+           || rib->type == ZEBRA_ROUTE_ISIS
+           || rib->type == ZEBRA_ROUTE_BGP)
+ 	{
+-- 
+2.30.1
+

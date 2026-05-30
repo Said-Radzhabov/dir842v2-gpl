@@ -1,0 +1,15 @@
+###################################
+#  RTL9301 (RTL9301 Demo board)   #
+###################################
+
+
+ifeq ($(RTL9301),y)
+#  export RTL9301=y
+#  TARGET_CFLAGS += -DRTL9301
+  TARGET_CFLAGS += -mtune=34kc -march=34kc
+#else ifeq
+else
+$(error unknown RTK MSwitch device)
+endif
+
+TARGET_CFLAGS += -pipe -msoft-float

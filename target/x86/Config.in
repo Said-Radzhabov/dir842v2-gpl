@@ -1,0 +1,16 @@
+if i386
+menu "QEMU specific"
+
+# TODO: затем сделать отдельный таргет под qemu
+config BR2_QEMU_MEMORY
+	string "Qemu allocating"
+	default "512M"
+
+config BR2_QEMU_USE_STORAGE
+	bool "Additional storage drive"
+	default y
+	help
+	  This enables a persistent storage drive for virtual machine for
+	  storing and loading config/factory settings.
+endmenu
+endif

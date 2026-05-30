@@ -1,0 +1,21 @@
+--- orig_openssl-1.1.1b/Configurations/10-main.conf	2019-02-26 22:15:30.000000000 +0800
++++ openssl-1.1.1b/Configurations/10-main.conf	2019-03-14 16:46:28.300652070 +0800
+@@ -715,6 +715,16 @@
+         inherit_from     => [ "linux-generic32", asm("armv4_asm") ],
+         perlasm_scheme   => "linux32",
+     },
++    "linux-bcmmips" => {
++        inherit_from     => [ "linux-generic32", asm("mips_asm") ],
++        cflags           => add("-D_REENTRANT -D_XOPEN_SOURCE=500 -D_BSD_SOURCE"),
++        perlasm_scheme   => "o32",
++    },
++    "linux-bcmarm" => {
++        inherit_from     => [ "linux-generic32", asm("armv4_asm") ],
++        cflags           => add("-D_REENTRANT"),
++        perlasm_scheme   => "linux32",
++    },
+     "linux-aarch64" => {
+         inherit_from     => [ "linux-generic64", asm("aarch64_asm") ],
+         perlasm_scheme   => "linux64",
+--- orig_openssl-1.1.1b/Configurations/unix-Makefile.tmpl	2019-03-15 09:58:32.157196272 +0800
++++ openssl-1.1.1b/Configurations/unix-Makefile.tmpl	2019-03-15 10:00:06.548194160 +0800

@@ -1,0 +1,23 @@
+config BR2_PACKAGE_NET_SNMP
+	bool "net-snmp"
+	select BR2_PACKAGE_OPENSSL
+
+if BR2_PACKAGE_NET_SNMP
+
+config BR2_PACKAGE_NET_SNMP_SUPPORT_READ_WRITE
+	bool "Support rw mibs"
+
+menu "Support net-snmp dlink MIBs"
+
+config BR2_PACKAGE_NET_SNMP_DLINK_DSL_STATISTICS
+	bool "Support fetching DSL statistics"
+	depends on BR2_SUPPORT_ADSL || BR2_SUPPORT_VDSL
+	default y
+
+config BR2_PACKAGE_NET_SNMP_DLINK_BALTCOM_MIBS
+	bool "Support Baltcom MIBs"
+	default n
+
+endmenu
+
+endif

@@ -1,0 +1,33 @@
+From fe87417c0e697c38b2daeec4bbc5fcb00157a0b6 Mon Sep 17 00:00:00 2001
+From: Maxim Zhukov <mzhukov@dlink.ru>
+Date: Tue, 20 Apr 2021 19:33:21 +0300
+Subject: [PATCH] [#45938] jansson: needs math library
+
+libjansson.so doesn't list libm in its NEEDED header. Fixes the following
+nftables config time failure:
+
+.../usr/lib/libjansson.so.4: undefined reference to `__isnan'
+.../usr/lib/libjansson.so.4: undefined reference to `__isinf'
+
+Signed-off-by: Maxim Zhukov <mzhukov@dlink.ru>
+---
+ CMakeLists.txt | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f8e7e84..8465af6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -378,6 +378,9 @@ else()
+       POSITION_INDEPENDENT_CODE true)
+ endif()
+ 
++# libjansson.so doesn't list libm in its NEEDED header.
++target_link_libraries(jansson m)
++
+ if (JANSSON_EXAMPLES)
+ 	add_executable(simple_parse "${CMAKE_CURRENT_SOURCE_DIR}/examples/simple_parse.c")
+ 	target_link_libraries(simple_parse jansson)
+-- 
+2.31.1
+

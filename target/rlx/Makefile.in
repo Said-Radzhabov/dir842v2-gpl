@@ -1,0 +1,38 @@
+export RLX:=y
+TARGET_CFLAGS += -DRLX
+
+ifeq (${RTL8196C},y)
+  RTL_CHIP:=8196C
+else ifeq (${RTL8196E},y)
+  RTL_CHIP:=8196E
+else ifeq (${RTL819xD},y)
+  RTL_CHIP:=819xD
+else ifeq (${RTL8198},y)
+  RTL_CHIP:=8198
+else ifeq (${RTL8881A},y)
+  RTL_CHIP:=8881A
+else ifeq (${RTL8198C},y)
+  RTL_CHIP:=8198C
+else ifeq (${RTL8197F},y)
+  RTL_CHIP:=8197F
+endif
+
+ifeq ($(BR2_LINUX_KERNEL_CUSTOM_REPO), "sdk_kernels/rtl3.2.4_9xD_kernel")
+$(error Your kernel ${BR2_LINUX_KERNEL_CUSTOM_REPO} is deprecated)
+endif
+
+ifeq (${RLX_819X},y)
+TARGET_CFLAGS += -DRLX_819X -DRTL${RTL_CHIP}
+endif
+
+ifeq ($(RTL8367),y)
+TARGET_CFLAGS += -DRTL8367
+endif
+
+ifeq ($(RTL8211FS),y)
+TARGET_CFLAGS += -DRTL8211FS
+endif
+
+ifeq ($(RTL8211F),y)
+TARGET_CFLAGS += -DRTL8211F
+endif

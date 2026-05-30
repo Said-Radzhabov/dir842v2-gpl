@@ -1,0 +1,7 @@
+config BR2_PACKAGE_LIBPRINTF
+	bool "libprintf"
+	default n
+	help
+	  Userspace library for *printf set of functions.
+
+	  https://github.com/farisey-ru/printf.git

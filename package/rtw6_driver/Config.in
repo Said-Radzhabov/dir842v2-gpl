@@ -1,0 +1,32 @@
+menuconfig BR2_PACKAGE_RTW6_DRIVER
+	bool "Realtek WiFi6 Driver"
+	default y
+
+if BR2_PACKAGE_RTW6_DRIVER
+
+config BR2_PACKAGE_RTW6_DRIVER_VERSION
+	string "Git Branch"
+	default "usdk_123"
+
+config BR2_PACKAGE_RTW6_DRIVER_PROFILE
+	string "Profile Name"
+
+config BR2_PACKAGE_RTW6_CONFIG_PATH
+	string "Path to config files on rootfs"
+	default "/etc/rtw6_conf/"
+
+config BR2_RTW6_DRIVER_8192
+	bool
+	default y
+	depends on BR2_WIFI_2GHZ_RTW6_8192F
+	help
+	  Enabled if using rtl8192cd wifi driver
+
+config BR2_RTW6_DRIVER_8852
+	bool
+	default y
+	depends on BR2_WIFI_5GHZ_RTW6_8832A
+	help
+	  Enabled if using rtl8852 (g6) wifi driver
+	
+endif

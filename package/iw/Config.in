@@ -1,0 +1,17 @@
+config BR2_PACKAGE_IW
+	bool "iw"
+	select BR2_PACKAGE_LIBNL_TINY if !BR2_PACKAGE_LIBNL
+
+if BR2_PACKAGE_IW
+
+config BR2_IW_VERSION
+	string "iw branch (5.9 if empty)"
+	default "3.6" if BR2_ralink
+	default "5.9"
+	help
+		3.6 version
+		4.9 version
+		5.4 version
+		5.9 version
+
+endif

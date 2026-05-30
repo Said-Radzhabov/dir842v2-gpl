@@ -1,0 +1,46 @@
+From 2c47199912514a0b26fb68771368b9571bc8ff7f Mon Sep 17 00:00:00 2001
+From: farisey <anikulin@dlink.ru>
+Date: Fri, 5 Apr 2019 17:34:10 +0300
+Subject: [PATCH] Add ifname to struct kpw.
+
+Due to index is 0 alreay, we need data to make kernel call.
+---
+ ldpd/lde.c  | 2 ++
+ ldpd/ldpd.h | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/ldpd/lde.c b/ldpd/lde.c
+index 286da43b..04f57b78 100644
+--- a/ldpd/lde.c
++++ b/ldpd/lde.c
+@@ -628,6 +628,7 @@ lde_send_change_klabel(struct fec_node *fn, struct fec_nh *fnh)
+ 		pw->flags |= F_PW_STATUS_UP;
+ 
+ 		memset(&kpw, 0, sizeof(kpw));
++		strlcpy(kpw.ifname, pw->ifname, sizeof(kpw.ifname));
+ 		kpw.ifindex = pw->ifindex;
+ 		kpw.pw_type = fn->fec.u.pwid.type;
+ 		kpw.af = pw->af;
+@@ -691,6 +692,7 @@ lde_send_delete_klabel(struct fec_node *fn, struct fec_nh *fnh)
+ 		pw->flags &= ~F_PW_STATUS_UP;
+ 
+ 		memset(&kpw, 0, sizeof(kpw));
++		strlcpy(kpw.ifname, pw->ifname, sizeof(kpw.ifname));
+ 		kpw.ifindex = pw->ifindex;
+ 		kpw.pw_type = fn->fec.u.pwid.type;
+ 		kpw.af = pw->af;
+diff --git a/ldpd/ldpd.h b/ldpd/ldpd.h
+index 9601f25f..9ad68a04 100644
+--- a/ldpd/ldpd.h
++++ b/ldpd/ldpd.h
+@@ -442,6 +442,7 @@ struct kroute {
+ };
+ 
+ struct kpw {
++	char			 ifname[IF_NAMESIZE];
+ 	unsigned short		 ifindex;
+ 	int			 pw_type;
+ 	int			 af;
+-- 
+2.30.1
+

@@ -1,0 +1,12 @@
+choice
+	prompt "Target Variant"
+
+config RTL9607C
+	bool "RTL9607C"
+	select mips
+
+config RTL8198D
+	bool "RTL8198D"
+	select mips
+
+endchoice

@@ -1,0 +1,39 @@
+From 7f2219983f9a9754c4b9244aec668421981fc334 Mon Sep 17 00:00:00 2001
+From: farisey <anikulin@dlink.ru>
+Date: Thu, 11 Apr 2019 12:56:30 +0300
+Subject: [PATCH] ospf: Connect to DRU software.
+
+Service connect.
+---
+ ospfd/ospf_main.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/ospfd/ospf_main.c b/ospfd/ospf_main.c
+index 32b64e2a..16d3946a 100644
+--- a/ospfd/ospf_main.c
++++ b/ospfd/ospf_main.c
+@@ -51,6 +51,10 @@
+ #include "ospfd/ospf_zebra.h"
+ #include "ospfd/ospf_vty.h"
+ 
++#ifdef DLINK_SOFTWARE
++#include <d-link/d_service_notify.h>
++#endif
++
+ /* ospfd privileges */
+ zebra_capabilities_t _caps_p [] = 
+ {
+@@ -334,6 +338,10 @@ main (int argc, char **argv)
+   /* Print banner. */
+   zlog_notice ("OSPFd %s starting: vty@%d", QUAGGA_VERSION, vty_port);
+ 
++#ifdef DLINK_SOFTWARE
++	dlink_service_connect(0);
++#endif
++
+   /* Fetch next active thread. */
+   while (thread_fetch (master, &thread))
+     thread_call (&thread);
+-- 
+2.30.1
+

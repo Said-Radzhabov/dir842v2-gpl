@@ -1,0 +1,9 @@
+config BR2_PACKAGE_ZABBIX
+	bool "zabbix"
+	select BR2_PACKAGE_PCRE
+	select BR2_PACKAGE_LIBICONV
+	help
+	  Zabbix is an enterprise-class open source distributed
+	  monitoring solution.Zabbix is free of cost. Zabbix
+	  is written and distributed under the GPL General Public
+	  License version 2.

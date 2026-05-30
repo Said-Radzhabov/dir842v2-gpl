@@ -1,0 +1,4 @@
+config BR2_PACKAGE_LIBDIALPLAN
+	bool "libdialplan"
+	help
+		Library for check phone dialing number by dialplan

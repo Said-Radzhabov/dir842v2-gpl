@@ -1,0 +1,12 @@
+menu "Vendor options"
+source "vendor/dlink/Config.in"
+
+if BR2_ralink
+source "vendor/ralink/Config.in"
+endif
+
+if (BR2_rlx && !BR2_modems) || BR2_rtk_luna
+source "vendor/realtek/Config.in"
+endif
+
+endmenu

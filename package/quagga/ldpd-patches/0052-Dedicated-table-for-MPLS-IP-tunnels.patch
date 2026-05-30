@@ -1,0 +1,247 @@
+From f7947dd57dfe50966329833890717315b5d8ad4c Mon Sep 17 00:00:00 2001
+From: farisey <anikulin@dlink.ru>
+Date: Wed, 3 Apr 2019 19:16:50 +0300
+Subject: [PATCH] Dedicated table for MPLS IP tunnels.
+
+--enable-mpls-ip-encap-table=NUM
+
+Allows to have either OSPF (table main) or MPLS (table NUM)
+for the same FEC.
+
+Possible bug: OSPF (deselected) route may stay after Zebra is stopped:
+
+9.9.9.9 via 10.90.8.100 dev eth3 proto zebra metric 11
+
+it lives over zebra's restarts.
+
+TODO: make wiping on stop and start (see rib_weed_tables()).
+---
+ configure.ac       | 17 ++++++++++++++++
+ ldpd/ldp_zebra.c   | 12 ++++++++++++
+ lib/zclient.c      |  4 ++++
+ lib/zclient.h      |  1 +
+ zebra/rt_netlink.c | 27 +++++++++++++++++++++++++
+ zebra/zebra_rib.c  | 49 ++++++++++++++++++++++++++++++++++++++++++----
+ 6 files changed, 106 insertions(+), 4 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index 2d363c31..20433421 100755
+--- a/configure.ac
++++ b/configure.ac
+@@ -305,6 +305,8 @@ AC_ARG_ENABLE(fpm,
+   AS_HELP_STRING([--enable-fpm], [enable Forwarding Plane Manager support]))
+ AC_ARG_ENABLE(mpls,
+   AS_HELP_STRING([--enable-mpls], [enable MPLS support - requires compatible kernel]))
++AC_ARG_ENABLE(mpls-ip-encap-table,
++  AS_HELP_STRING([--enable-mpls-ip-encap-table=ARG], [route table to which encap mpls IP are added, ARG must be digit]))
+ AC_ARG_ENABLE(werror,
+   AS_HELP_STRING([--enable-werror], [enable -Werror (recommended for developers only)]))
+ AC_ARG_ENABLE([protobuf],
+@@ -406,6 +408,21 @@ else
+ fi
+ AC_SUBST(MPLS_METHOD)
+ 
++
++AC_MSG_CHECKING(whether we dedicate the table for MPLS IP)
++case "${enable_mpls_ip_encap_table}" in
++  [[1-9]|[1-9][0-9]|[1-9][0-9][0-9]])
++    AC_DEFINE_UNQUOTED(MPLS_IP_ENCAP_TABLE, ${enable_mpls_ip_encap_table}, Table for MPLS encap of IP)
++    ;;
++  "no"|"")
++    ;;
++  *)
++    AC_MSG_FAILURE([Please specify digit to enable dedicated route table for MPLS encap of IP])
++    ;;
++esac
++AC_MSG_RESULT("${enable_mpls_ip_encap_table}")
++
++
+ if test "${enable_tcp_zebra}" = "yes"; then
+   AC_DEFINE(HAVE_TCP_ZEBRA,,Use TCP for zebra communication)
+ fi
+diff --git a/ldpd/ldp_zebra.c b/ldpd/ldp_zebra.c
+index 53eb4883..328bc6f6 100644
+--- a/ldpd/ldp_zebra.c
++++ b/ldpd/ldp_zebra.c
+@@ -169,6 +169,12 @@ zebra_send_mpls_ftn(int delete, struct zclient *zclient, int af,
+ 		api4.ifindex_num = 0;
+ 		SET_FLAG(api4.message, ZAPI_MESSAGE_LABEL);
+ 		api4.label = label;
++#ifdef MPLS_IP_ENCAP_TABLE
++		api4.table = MPLS_IP_ENCAP_TABLE;
++		SET_FLAG(api4.message, ZAPI_MESSAGE_TABLE);
++#elif defined(DLINK_SOFTWARE)
++#error MPLS_IP_ENCAP_TABLE must be defined for DRU operating
++#endif
+ 
+ 		if (delete)
+ 			cmd = ZEBRA_IPV4_ROUTE_DELETE;
+@@ -192,6 +198,12 @@ zebra_send_mpls_ftn(int delete, struct zclient *zclient, int af,
+ 		api6.ifindex_num = 0;
+ 		SET_FLAG(api6.message, ZAPI_MESSAGE_LABEL);
+ 		api6.label = label;
++#ifdef MPLS_IP_ENCAP_TABLE
++		api6.table = MPLS_IP_ENCAP_TABLE;
++		SET_FLAG(api6.message, ZAPI_MESSAGE_TABLE);
++#elif defined(DLINK_SOFTWARE)
++#error MPLS_IP_ENCAP_TABLE must be defined for DRU operating
++#endif
+ 
+ 		if (delete)
+ 			cmd = ZEBRA_IPV6_ROUTE_DELETE;
+diff --git a/lib/zclient.c b/lib/zclient.c
+index be1b1204..0bad9c1c 100644
+--- a/lib/zclient.c
++++ b/lib/zclient.c
+@@ -596,6 +596,8 @@ zapi_ipv4_route (u_char cmd, struct zclient *zclient, struct prefix_ipv4 *p,
+     stream_putl (s, api->mtu);
+   if (CHECK_FLAG (api->message, ZAPI_MESSAGE_TAG))
+     stream_putl (s, api->tag);
++  if (CHECK_FLAG (api->message, ZAPI_MESSAGE_TABLE))
++    stream_putc (s, api->table);
+ 
+ #ifdef DLINK_SOFTWARE
+   if (CHECK_FLAG(api->message, ZAPI_MESSAGE_TABLE))
+@@ -663,6 +665,8 @@ zapi_ipv6_route (u_char cmd, struct zclient *zclient, struct prefix_ipv6 *p,
+     stream_putl (s, api->mtu);
+   if (CHECK_FLAG (api->message, ZAPI_MESSAGE_TAG))
+     stream_putl (s, api->tag);
++  if (CHECK_FLAG (api->message, ZAPI_MESSAGE_TABLE))
++    stream_putc (s, api->table);
+ 
+ #ifdef DLINK_SOFTWARE
+   if (CHECK_FLAG(api->message, ZAPI_MESSAGE_TABLE))
+diff --git a/lib/zclient.h b/lib/zclient.h
+index e645a005..c8c22099 100644
+--- a/lib/zclient.h
++++ b/lib/zclient.h
+@@ -101,6 +101,7 @@ struct zclient
+ #define ZAPI_MESSAGE_MTU      0x10
+ #define ZAPI_MESSAGE_TAG      0x20
+ #define ZAPI_MESSAGE_LABEL    0x40
++#define ZAPI_MESSAGE_TABLE    0x80
+ 
+ #ifdef DLINK_SOFTWARE
+ #define ZAPI_MESSAGE_TABLE    0x40
+diff --git a/zebra/rt_netlink.c b/zebra/rt_netlink.c
+index 664e784e..a2c9cbfb 100644
+--- a/zebra/rt_netlink.c
++++ b/zebra/rt_netlink.c
+@@ -829,6 +829,11 @@ netlink_routing_table (struct sockaddr_nl *snl, struct nlmsghdr *h,
+   if (rtm->rtm_family == AF_MPLS)
+     return 0;
+ 
++	if (tb[RTA_TABLE])
++		table = *(int *)RTA_DATA(tb[RTA_TABLE]);
++	else
++		table = rtm->rtm_table;
++
+    /* Route which inserted by Zebra. */
+   if (rtm->rtm_protocol == RTPROT_ZEBRA)
+     flags |= ZEBRA_FLAG_SELFROUTE;
+@@ -1057,6 +1062,28 @@ netlink_route_change (struct sockaddr_nl *snl, struct nlmsghdr *h,
+       return 0;
+     }
+ 
++	/* Table corresponding to route. */
++	if (tb[RTA_TABLE])
++		table = *(int *)RTA_DATA(tb[RTA_TABLE]);
++	else
++		table = rtm->rtm_table;
++
++	/* there are is_zebra_valid_kernel_table() and
++	 * is_zebra_main_routing_table() in modern FRR.
++	 */
++	if (table != zebrad.rtm_table_default) {
++		switch (table) {
++			case RT_TABLE_MAIN:
++				break;
++#ifdef MPLS_IP_ENCAP_TABLE
++			case MPLS_IP_ENCAP_TABLE:
++				break;
++#endif
++			default:
++				return 0;
++		}
++	}
++
+   index = 0;
+   metric = 0;
+   dest = NULL;
+diff --git a/zebra/zebra_rib.c b/zebra/zebra_rib.c
+index 14e4e9b0..b1dc886b 100644
+--- a/zebra/zebra_rib.c
++++ b/zebra/zebra_rib.c
+@@ -1223,6 +1223,28 @@ rib_choose_best (struct rib *current, struct rib *alternate)
+   return current;
+ }
+ 
++static inline int CUSTOM_TABLE(const struct rib *rib)
++{
++#ifdef MPLS_IP_ENCAP_TABLE
++	if (rib->table == MPLS_IP_ENCAP_TABLE)
++		return 1;
++#endif
++	return 0;
++}
++
++static inline int SAME_TABLE(const struct rib *r1, const struct rib *r2)
++{
++#ifdef MPLS_IP_ENCAP_TABLE
++	if (r1->table == r2->table)
++		return 1;
++	if (r1->table == MPLS_IP_ENCAP_TABLE)
++		return 0;
++	if (r2->table == MPLS_IP_ENCAP_TABLE)
++		return 0;
++#endif
++	return 1;
++}
++
+ /* Core function for processing routing information base. */
+ static void
+ rib_process (struct route_node *rn)
+@@ -1311,8 +1333,21 @@ rib_process (struct route_node *rn)
+           {
+             /* Install new or replace existing FIB entry */
+             SET_FLAG (new_fib->status, RIB_ENTRY_SELECTED_FIB);
+-            if (! RIB_SYSTEM_ROUTE (new_fib))
+-              rib_update_kernel (rn, old_fib, new_fib);
++            if (! RIB_SYSTEM_ROUTE (new_fib)) {
++              /* do no allow remove OSPF route with LDP's one */
++              int preserve_old = old_fib &&
++                                 !SAME_TABLE(old_fib, new_fib) &&
++                                 CUSTOM_TABLE(new_fib);
++              if (preserve_old) {
++                zlog_info("%s: rn %p: preserve route %p: %s [%u/%u]",
++                          __func__, rn, old_fib,
++                          zebra_route_string(old_fib->type),
++                          old_fib->distance, old_fib->metric);
++                rib_update_kernel (rn, NULL, new_fib);
++              } else {
++                rib_update_kernel (rn, old_fib, new_fib);
++              }
++            }
+           }
+ 
+         if (info->safi == SAFI_UNICAST)
+@@ -3081,8 +3116,14 @@ rib_weed_table (struct route_table *table)
+ 	  if (CHECK_FLAG (rib->status, RIB_ENTRY_REMOVED))
+ 	    continue;
+ 
+-	  if (rib->table != zebrad.rtm_table_default &&
+-	      rib->table != RT_TABLE_MAIN)
++		if (rib->table == zebrad.rtm_table_default)
++			continue;
++		if (rib->table == RT_TABLE_MAIN)
++			continue;
++#ifdef MPLS_IP_ENCAP_TABLE
++		if (rib->table == MPLS_IP_ENCAP_TABLE)
++			continue;
++#endif
+             rib_delnode (rn, rib);
+ 	}
+ }
+-- 
+2.30.1
+

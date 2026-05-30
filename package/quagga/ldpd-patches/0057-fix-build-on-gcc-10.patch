@@ -1,0 +1,87 @@
+From 60f12166bf6c716ba17f7fd1beb8748e87da7887 Mon Sep 17 00:00:00 2001
+From: Maxim Zhukov <mzhukov@dlink.ru>
+Date: Sat, 3 Apr 2021 15:55:29 +0300
+Subject: [PATCH] fix build on gcc 10
+
+Fixes 'multiple definition' error
+---
+ ldpd/ldpd.c | 3 ++-
+ ldpd/ldpd.h | 4 +++-
+ ldpd/ldpe.c | 4 +++-
+ ldpd/ldpe.h | 2 +-
+ 4 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/ldpd/ldpd.c b/ldpd/ldpd.c
+index 6471dc8..4919e27 100644
+--- a/ldpd/ldpd.c
++++ b/ldpd/ldpd.c
+@@ -69,6 +69,7 @@ static void		 merge_l2vpns(struct ldpd_conf *, struct ldpd_conf *);
+ static void		 merge_l2vpn(struct ldpd_conf *, struct l2vpn *,
+ 			    struct l2vpn *);
+ 
++enum ldpd_process ldpd_process;
+ struct ldpd_global	 global;
+ struct ldpd_conf	*ldpd_conf;
+ 
+@@ -81,7 +82,7 @@ static pid_t		 lde_pid;
+ #define LDP_VTY_PORT		2612
+ 
+ /* Master of threads. */
+-struct thread_master *master;
++extern struct thread_master *master;
+ 
+ /* Process ID saved for use by init system */
+ static const char *pid_file = PATH_LDPD_PID;
+diff --git a/ldpd/ldpd.h b/ldpd/ldpd.h
+index 9ad68a0..96bd73b 100644
+--- a/ldpd/ldpd.h
++++ b/ldpd/ldpd.h
+@@ -359,7 +359,9 @@ enum ldpd_process {
+ 	PROC_MAIN,
+ 	PROC_LDP_ENGINE,
+ 	PROC_LDE_ENGINE
+-} ldpd_process;
++};
++
++extern enum ldpd_process ldpd_process;
+ 
+ enum socket_type {
+ 	LDP_SOCKET_DISC,
+diff --git a/ldpd/ldpe.c b/ldpd/ldpe.c
+index 679f9db..4b36c8c 100644
+--- a/ldpd/ldpe.c
++++ b/ldpd/ldpe.c
+@@ -43,6 +43,8 @@ static void	 ldpe_setup_sockets(int, int, int, int);
+ static void	 ldpe_close_sockets(int);
+ static void	 ldpe_iface_af_ctl(struct ctl_conn *, int, unsigned int);
+ 
++char	*pkt_ptr;	/* packet buffer */
++
+ struct ldpd_conf	*leconf;
+ #ifdef __OpenBSD__
+ struct ldpd_sysdep	 sysdep;
+@@ -55,7 +57,7 @@ static struct thread	*pfkey_ev;
+ #endif
+ 
+ /* Master of threads. */
+-struct thread_master *master;
++extern struct thread_master *master;
+ 
+ /* ldpe privileges */
+ static zebra_capabilities_t _caps_p [] =
+diff --git a/ldpd/ldpe.h b/ldpd/ldpe.h
+index b83f97b..fd75d67 100644
+--- a/ldpd/ldpe.h
++++ b/ldpd/ldpe.h
+@@ -273,7 +273,7 @@ struct tcp_conn		*tcp_new(int, struct nbr *);
+ void			 pending_conn_del(struct pending_conn *);
+ struct pending_conn	*pending_conn_find(int, union ldpd_addr *);
+ 
+-char	*pkt_ptr;	/* packet buffer */
++extern char	*pkt_ptr;	/* packet buffer */
+ 
+ /* pfkey.c */
+ #ifdef __OpenBSD__
+-- 
+2.31.0
+

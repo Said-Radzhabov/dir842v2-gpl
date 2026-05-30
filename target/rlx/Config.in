@@ -1,0 +1,99 @@
+choice
+	prompt "Target Variant"
+
+config RTL8685FB
+	bool "RTL8685FB"
+	select mips
+	select RLX_86XX
+
+config RTL8685PB
+	bool "RTL8685PB"
+	select mips
+	select RLX_86XX
+
+config RTL8196C
+	bool "RTL8196C"
+	select RLX_819X
+	select mips
+
+config RTL8196E
+	bool "RTL8196E"
+	select RLX_819X
+	select mips
+
+config RTL819xD
+	bool "RTL819xD"
+	select RLX_819X
+	select mips
+
+config RTL8198
+	bool "RTL8198"
+	select RLX_819X
+	select mips
+
+config RTL8881A
+	bool "RTL8881A"
+	select RLX_819X
+	select mips
+
+config RTL8198C
+	bool "RTL8198C"
+	select RLX_819X
+	select mips
+
+config RTL8197F
+	bool "RTL8197F"
+	select RLX_819X
+	select mipsel
+
+endchoice
+
+config RLX_819X
+	bool
+	default n
+	depends on !BR2_modems
+
+config RLX_86XX
+	bool
+	default n
+	depends on BR2_modems
+
+config RTL8367
+	bool "Gigabit Switch RTL8367"
+	depends on RTL819xD || RTL8197F
+	help
+	  Enable support for gigabit ethernet switch RTL8367.
+
+config RTL8211FS
+	bool "Gigabit Transceiver RTL8211FS"
+	depends on RTL819xD || RTL8197F
+	help
+	  Enable support for gigabit ethernet fiber transceiver RTL8211FS.
+
+config RTL8211F
+	bool "Gigabit Transceiver RTL8211F"
+	depends on RTL819xD || RTL8197F
+	help
+	  Enable support for gigabit ethernet transceiver RTL8211F.
+
+if !BR2_modems
+	config BR2_WAN_PORT_NUM_0
+	bool "Wan port number is 0"
+	default n
+
+	config BR2_WAN_PORT_NUM_3
+	bool "Wan port number is 3"
+	default n
+endif
+
+config BR2_TAR_IMAGE
+	bool "Tar image"
+	default n
+	help
+		Build image as tar archive without compression
+
+config BR2_RLX_KERNEL_PADDING
+	int "kernel padding"
+	default 65536
+	depends on RLX_819X
+
